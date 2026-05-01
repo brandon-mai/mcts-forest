@@ -118,11 +118,14 @@ def main():
     parser.add_argument("--resume_dir", type=str, default=None)
     parser.add_argument("--use_amp", action="store_true")
     parser.add_argument("--wandb", action="store_true")
+    parser.add_argument("--wandb_key", type=str, default=None, help="WandB API Key for non-interactive login")
     args = parser.parse_args()
 
     if args.wandb:
         global wandb
         import wandb
+        if args.wandb_key:
+            wandb.login(key=args.wandb_key)
         wandb.init(project="mcts-forest", config=vars(args))
 
     temp_env = REGISTRY.get_env(args.env)

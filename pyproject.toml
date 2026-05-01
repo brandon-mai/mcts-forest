@@ -3,7 +3,7 @@ name = "mcts-forest"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "gymnasium[classic-control,other,toy-text]>=1.2.3",
     "matplotlib>=3.10.8",

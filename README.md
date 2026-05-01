@@ -26,8 +26,9 @@ uv run train --algo gsp_alphazero --iterations 1 --games_per_it 1 --sims 10 --wa
     - **GSP**: Trained on GSP-solver data, evaluated with GSP.
     - **Baseline**: Trained on Tree-search data, evaluated with Tree-search.
     - **Cross**: Trained on Tree-search data, evaluated with GSP.
-    ```bash
-    uv run train --algo gsp_alphazero --env taxi --use_amp --wandb
+    ```python
+    # Use python -m to avoid 'uv run' creating a large venv in the output folder
+    !python -m mcts_forest.scripts.train_loop --algo gsp_alphazero --env taxi --use_amp --wandb --wandb_key "YOUR_KEY_HERE"
     ```
 
 ## Development Strategy
