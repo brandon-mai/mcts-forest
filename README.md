@@ -1,10 +1,35 @@
 # Monte Carlo Forest 🌲
 
-A research-oriented framework for benchmarking and comparing Monte Carlo Tree Search (MCTS) methods with rigorous RL evaluation standards.
+### Neural Solvers (AlphaZero, MuZero, Stochastic MuZero)
+Unified under the `GSP` prefix, these solvers use Numba-accelerated search cores and PyTorch neural networks.
 
-## Key Features
+## Kaggle & Cloud Execution
+The framework is optimized for both local CPU development and Kaggle GPU training.
 
-- **High-Performance Functional Core**: Numba-accelerated search engines achieving up to 1,000,000 simulations per second.
+### Local Development (Smoke Test)
+Run a quick iteration on your laptop CPU to verify logic:
+```bash
+uv run train --algo gsp_muzero --iterations 1 --games_per_it 1 --sims 10 --wandb
+```
+
+### Kaggle GPU Deployment
+1.  **Accelerator**: Select `GPU P100` (recommended) or `GPU T4 x2`.
+2.  **Persistence**: Enable **Files Persistence** in Notebook Settings.
+3.  **Environment Setup**:
+    ```python
+    !pip install -q uv
+    !git clone <your-repo-url>
+    %cd mcts-forest
+    !uv pip install --system -e .
+    ```
+4.  **Training**: Use `--use_amp` on T4 GPUs for 2x speed.
+    ```bash
+    uv run train --algo gsp_muzero --use_amp --wandb
+    ```
+
+## Development Strategy
+- **Surgical Changes**: We prioritize stability. Changes to the core math (like the Dynamic Power-Mean Shift) are ported across all solvers simultaneously to maintain parity.
+- **Performance**: We use Numba for tree operations and PyTorch for batch training.
 - **Protocol-Based Interface**: Lean `GymAdapter` that supports state-snapshotting for Gymnasium environments without redundant abstractions.
 - **Dynamic Registry**: Centralized `REGISTRY` for managing solvers (UCT, MCGS) and environments (FrozenLake, Taxi).
 - **Rigorous Benchmarking**: Support for multi-seed experiments, CSV data export, and automated summary statistics.

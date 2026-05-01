@@ -220,3 +220,5 @@ gymcts_original/
 mcgs_copy/
 results/
 checkpoints/
+wandb/
+*.txt

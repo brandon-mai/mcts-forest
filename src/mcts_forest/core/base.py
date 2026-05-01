@@ -70,10 +70,10 @@ class ExperienceBuffer:
 
 class TorchModelAdapter:
     """Standardized adapter for Neural MCTS solvers."""
-    def __init__(self, model: nn.Module, device="cpu", n_states=16):
+    def __init__(self, model: nn.Module, device=None, n_states=16):
         self.model = model
-        self.device = device
-        self.model.to(device)
+        self.device = device if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device)
         self.model.eval()
         self.n_states = n_states
 

@@ -86,11 +86,22 @@ class GSPStochasticMuZero:
                     curr.visit_count += 1
                     if not curr.chance_nodes: curr.value_sum = float(v_back) * curr.visit_count
                     else:
+                        # Calculate q values for chance nodes and find q_min
+                        qcs = []
+                        for chance in curr.chance_nodes.values():
+                            if chance.visit_count > 0:
+                                q_c = sum((o.visit_count/chance.visit_count)*(o.reward + self.gamma*o.value()) for o in chance.outcomes.values())
+                                qcs.append(q_c)
+                        
+                        curr_shift = max(0.0, -min(qcs)) + 1.0 if qcs else 1.0
+                        
                         w_sum = 0.0
                         for a, chance in curr.chance_nodes.items():
                             if chance.visit_count > 0:
                                 q_c = sum((o.visit_count/chance.visit_count)*(o.reward + self.gamma*o.value()) for o in chance.outcomes.values())
-                                w_sum += (chance.visit_count/curr.visit_count) * (max(0.0, q_c+1.0)**self.p)
+                                q_val = q_c + curr_shift
+                                if q_val < 0.0: q_val = 0.0
+                                w_sum += (chance.visit_count/curr.visit_count) * (q_val ** self.p)
                         v_back = (w_sum**(1.0/self.p))-1.0
                         curr.value_sum = float(v_back)*curr.visit_count
                         

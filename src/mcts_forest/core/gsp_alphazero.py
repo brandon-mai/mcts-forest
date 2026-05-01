@@ -71,11 +71,20 @@ def gsp_alphazero_core(n_sim, horizon, initial_state, c_puct, gamma, p, dynamics
             visit_count[n_id] += 1
             q_hat[n_id, a] += (r + gamma * v_back - q_hat[n_id, a]) / action_visits[n_id, a]
             
+            # Dynamic Shift Calculation
+            q_min = 1e18
+            for act in range(q_hat.shape[1]):
+                if action_visits[n_id, act] > 0 and q_hat[n_id, act] < q_min:
+                    q_min = q_hat[n_id, act]
+            curr_shift = max(0.0, -q_min) + 1.0
+            
             w_sum, n_node = 0.0, float(visit_count[n_id])
             for act in range(q_hat.shape[1]):
                 if action_visits[n_id, act] > 0:
-                    w_sum += (action_visits[n_id, act] / n_node) * (max(0.0, q_hat[n_id, act] + 1.0) ** p)
-            v_hat[n_id] = (w_sum ** (1.0 / p)) - 1.0
+                    q_val = q_hat[n_id, act] + curr_shift
+                    if q_val < 0.0: q_val = 0.0
+                    w_sum += (action_visits[n_id, act] / n_node) * (q_val ** p)
+            v_hat[n_id] = (w_sum ** (1.0 / p)) - curr_shift
             v_back = v_hat[n_id]
 
 class GSPAlphaZero:

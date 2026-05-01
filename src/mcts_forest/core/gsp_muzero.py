@@ -102,12 +102,21 @@ class GSPMuZero:
                     curr.visit_count += 1
                     if not curr.children: curr.value_sum = float(v_back) * curr.visit_count
                     else:
+                        # Calculate q values for children and find q_min
+                        qs = []
+                        for child in curr.children.values():
+                            if child.visit_count > 0:
+                                qs.append(child.reward + self.gamma * child.value())
+                        
+                        curr_shift = max(0.0, -min(qs)) + 1.0 if qs else 1.0
+                        
                         w_sum = 0.0
                         for child in curr.children.values():
                             if child.visit_count > 0:
-                                q = child.reward + self.gamma * child.value()
-                                w_sum += (child.visit_count / curr.visit_count) * (max(0.0, q + 1.0) ** self.p)
-                        v_back = (w_sum ** (1.0 / self.p)) - 1.0
+                                q_val = (child.reward + self.gamma * child.value()) + curr_shift
+                                if q_val < 0.0: q_val = 0.0
+                                w_sum += (child.visit_count / curr.visit_count) * (q_val ** self.p)
+                        v_back = (w_sum ** (1.0 / self.p)) - curr_shift
                         curr.value_sum = float(v_back) * curr.visit_count
                     
         counts = np.array([root.children[a].visit_count for a in range(self.n_actions)])

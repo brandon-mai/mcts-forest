@@ -4,12 +4,16 @@ import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
 import time
+import numba
 from tqdm import tqdm
 from mcts_forest.core.base import TorchModelAdapter, ExperienceBuffer
 from mcts_forest.core.gsp_alphazero import GSPAlphaZero, GSPAlphaZeroNet
 from mcts_forest.core.gsp_muzero import GSPMuZero, GSPMuZeroNet
 from mcts_forest.core.gsp_stochastic_muzero import GSPStochasticMuZero, GSPStochasticMuZeroNet
 from mcts_forest.envs.gym_adapter import GymAdapter
+
+# 1. Kaggle CPU Optimization
+numba.config.NUMBA_NUM_THREADS = 4
 
 def get_algorithm_components(algo_name):
     if algo_name == "gsp_alphazero": return GSPAlphaZero, GSPAlphaZeroNet
@@ -33,9 +37,10 @@ def self_play_iteration(algo_class, model_adapter, it_idx, num_games=50, sims=40
         buffer.add([(s, p, reward) for s, p in episode_history])
     return buffer
 
-def train_iteration(model_adapter, buffer, epochs=5, batch_size=64, lr=0.001):
+def train_iteration(model_adapter, buffer, epochs=5, batch_size=64, lr=0.001, use_amp=False):
     print(f"--- [Training] {epochs} epochs ---")
     optimizer = optim.Adam(model_adapter.model.parameters(), lr=lr)
+    scaler = torch.amp.GradScaler(enabled=use_amp)
     model_adapter.model.train()
     one_hot_f = lambda s: np.eye(16)[s].astype(np.float32)
     steps = 0
@@ -44,14 +49,22 @@ def train_iteration(model_adapter, buffer, epochs=5, batch_size=64, lr=0.001):
             s_t = torch.tensor(states, dtype=torch.float32).to(model_adapter.device)
             pi_t = torch.tensor(target_pi, dtype=torch.float32).to(model_adapter.device)
             z_t = torch.tensor(target_z, dtype=torch.float32).to(model_adapter.device).unsqueeze(1)
+            
             optimizer.zero_grad()
-            pi_logits, v_pred = model_adapter.model(s_t)
-            # Standard AlphaZero style loss
-            value_loss = F.mse_loss(v_pred, z_t)
-            policy_loss = -torch.mean(torch.sum(pi_t * F.log_softmax(pi_logits, dim=-1), dim=-1))
-            (value_loss + policy_loss).backward()
-            optimizer.step()
+            with torch.amp.autocast(device_type=model_adapter.device.type, enabled=use_amp):
+                pi_logits, v_pred = model_adapter.model(s_t)
+                value_loss = F.mse_loss(v_pred, z_t)
+                policy_loss = -torch.mean(torch.sum(pi_t * F.log_softmax(pi_logits, dim=-1), dim=-1))
+                loss = value_loss + policy_loss
+            
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             steps += 1
+            
+            if "wandb" in globals() and wandb.run:
+                wandb.log({"loss": loss.item(), "v_loss": value_loss.item(), "p_loss": policy_loss.item()})
+                
     model_adapter.model.eval()
     return steps
 
@@ -63,21 +76,42 @@ def main():
     parser.add_argument("--games_per_it", type=int, default=1)
     parser.add_argument("--sims", type=int, default=100)
     parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--resume_dir", type=str, default=None, help="Directory to load 'latest.pt' from (e.g. /kaggle/input/...)")
+    parser.add_argument("--use_amp", action="store_true", help="Use mixed precision training")
+    parser.add_argument("--wandb", action="store_true", help="Log to Weights & Biases")
     args = parser.parse_args()
+
+    if args.wandb:
+        global wandb
+        import wandb
+        wandb.init(project="mcts-forest", config=vars(args))
 
     algo_class, net_class = get_algorithm_components(args.algo)
     checkpoint_dir = f"checkpoints/{args.algo}"; os.makedirs(checkpoint_dir, exist_ok=True)
-    adapter = TorchModelAdapter(net_class()); latest_pt = os.path.join(checkpoint_dir, "latest.pt")
-    if os.path.exists(latest_pt): adapter.load(latest_pt)
+    
+    adapter = TorchModelAdapter(net_class())
+    
+    # Checkpoint loading logic
+    load_path = None
+    if args.resume_dir and os.path.exists(os.path.join(args.resume_dir, "latest.pt")):
+        load_path = os.path.join(args.resume_dir, "latest.pt")
+    elif os.path.exists(os.path.join(checkpoint_dir, "latest.pt")):
+        load_path = os.path.join(checkpoint_dir, "latest.pt")
+    
+    if load_path:
+        print(f"--> Loading checkpoint from {load_path}")
+        adapter.load(load_path)
 
     it, total_steps = 1, 0
     for it_cnt in range(args.iterations):
         curr_it = it + it_cnt
         buffer = self_play_iteration(algo_class, adapter, curr_it, num_games=args.games_per_it, sims=args.sims)
-        steps = train_iteration(adapter, buffer, epochs=args.epochs)
+        steps = train_iteration(adapter, buffer, epochs=args.epochs, use_amp=args.use_amp)
         total_steps += steps
+        
         v_name = f"v{curr_it}_{total_steps}"
-        adapter.save(os.path.join(checkpoint_dir, f"{v_name}.pt")); adapter.save(latest_pt)
+        adapter.save(os.path.join(checkpoint_dir, f"{v_name}.pt"))
+        adapter.save(os.path.join(checkpoint_dir, "latest.pt"))
         print(f"*** Iteration {curr_it} Complete | Total Steps: {total_steps} ***\n")
 
 if __name__ == "__main__": main()
