@@ -7,14 +7,14 @@ Unified under the `GSP` prefix, these solvers use Numba-accelerated search cores
 The framework is optimized for both local CPU development and Kaggle GPU training.
 
 ### Local Development (Smoke Test)
-Run a quick iteration on your laptop CPU to verify logic:
+Run a quick iteration locally to verify the triple-variant logic:
 ```bash
-uv run train --algo gsp_muzero --iterations 1 --games_per_it 1 --sims 10 --wandb
+uv run train --algo gsp_alphazero --iterations 1 --games_per_it 1 --sims 10 --wandb
 ```
 
 ### Kaggle GPU Deployment
-1.  **Accelerator**: Select `GPU P100` (recommended) or `GPU T4 x2`.
-2.  **Persistence**: Enable **Files Persistence** in Notebook Settings.
+1.  **Accelerator**: Select `GPU P100` (recommended).
+2.  **Persistence**: Enable **Files Persistence** in Settings.
 3.  **Environment Setup**:
     ```python
     !pip install -q uv
@@ -22,9 +22,12 @@ uv run train --algo gsp_muzero --iterations 1 --games_per_it 1 --sims 10 --wandb
     %cd mcts-forest
     !uv pip install --system -e .
     ```
-4.  **Training**: Use `--use_amp` on T4 GPUs for 2x speed.
+4.  **Triple-Variant Training**: By default, the script trains three concurrent models:
+    - **GSP**: Trained on GSP-solver data, evaluated with GSP.
+    - **Baseline**: Trained on Tree-search data, evaluated with Tree-search.
+    - **Cross**: Trained on Tree-search data, evaluated with GSP.
     ```bash
-    uv run train --algo gsp_muzero --use_amp --wandb
+    uv run train --algo gsp_alphazero --env taxi --use_amp --wandb
     ```
 
 ## Development Strategy

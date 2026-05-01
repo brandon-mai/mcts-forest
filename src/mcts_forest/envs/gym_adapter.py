@@ -129,6 +129,10 @@ class GymAdapter(EnvBase):
             return self.action_space.n
         return 0
 
+    @property
+    def observation_space(self) -> gym.Space:
+        return self.env.observation_space
+
     def get_numba_dynamics(self) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
         """
         Extracts transition dynamics for Toy-Text environments as NumPy arrays.

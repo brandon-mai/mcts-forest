@@ -12,9 +12,13 @@ from mcts_forest.core.openloop_mcts import OpenLoopMCTS
 from mcts_forest.core.mcgs import MCGS
 from mcts_forest.core.gsp_uct import GSPUCT
 from mcts_forest.core.gsp_uct_f import GSPUCTFull
+from mcts_forest.core.gbopd import GBOPD
+from mcts_forest.core.gbop import GBOP
 from mcts_forest.core.gsp_alphazero import GSPAlphaZero, GSPAlphaZeroNet
 from mcts_forest.core.gsp_muzero import GSPMuZero, GSPMuZeroNet
 from mcts_forest.core.gsp_stochastic_muzero import GSPStochasticMuZero, GSPStochasticMuZeroNet
+from mcts_forest.core.alphazero import AlphaZero, AlphaZeroNet
+from mcts_forest.core.muzero import MuZero, MuZeroNet
 from mcts_forest.core.base import TorchModelAdapter
 from mcts_forest.core.random_agent import RandomAgent
 
@@ -41,6 +45,7 @@ REGISTRY.register_env("frozenlake8x8", lambda **kwargs: GymAdapter("FrozenLake-v
 REGISTRY.register_env("frozenlake8x8_slip", lambda **kwargs: GymAdapter("FrozenLake-v1", desc=get_map(8), is_slippery=True, **kwargs))
 REGISTRY.register_env("taxi", lambda **kwargs: GymAdapter("Taxi-v3", **kwargs))
 REGISTRY.register_env("taxi_rain", lambda **kwargs: GymAdapter("Taxi-v3", is_rainy=True, **kwargs))
+REGISTRY.register_env("cartpole", lambda **kwargs: GymAdapter("CartPole-v1", **kwargs))
 
 # 2. Register Solvers
 REGISTRY.register_solver("uct", lambda env, **kwargs: UCT(env, **kwargs))
@@ -50,6 +55,8 @@ REGISTRY.register_solver("openloop_mcts", lambda env, **kwargs: OpenLoopMCTS(env
 REGISTRY.register_solver("mcgs", lambda env, **kwargs: MCGS(env, **kwargs))
 REGISTRY.register_solver("gsp_uct", lambda env, **kwargs: GSPUCT(env, **kwargs))
 REGISTRY.register_solver("gsp_uct_f", lambda env, **kwargs: GSPUCTFull(env, **kwargs))
+REGISTRY.register_solver("gbopd", lambda env, **kwargs: GBOPD(env, **kwargs))
+REGISTRY.register_solver("gbop", lambda env, **kwargs: GBOP(env, **kwargs))
 
 def _get_zero_solver(env, solver_class, net_class, algo_name, **kwargs):
     model_path = f"checkpoints/{algo_name}/latest.pt"
@@ -61,4 +68,6 @@ def _get_zero_solver(env, solver_class, net_class, algo_name, **kwargs):
 REGISTRY.register_solver("gsp_alphazero", lambda env, **kwargs: _get_zero_solver(env, GSPAlphaZero, GSPAlphaZeroNet, "gsp_alphazero", **kwargs))
 REGISTRY.register_solver("gsp_muzero", lambda env, **kwargs: _get_zero_solver(env, GSPMuZero, GSPMuZeroNet, "gsp_muzero", **kwargs))
 REGISTRY.register_solver("gsp_stochastic_muzero", lambda env, **kwargs: _get_zero_solver(env, GSPStochasticMuZero, GSPStochasticMuZeroNet, "gsp_stochastic_muzero", **kwargs))
+REGISTRY.register_solver("alphazero", lambda env, **kwargs: _get_zero_solver(env, AlphaZero, AlphaZeroNet, "alphazero", **kwargs))
+REGISTRY.register_solver("muzero", lambda env, **kwargs: _get_zero_solver(env, MuZero, MuZeroNet, "muzero", **kwargs))
 REGISTRY.register_solver("random", lambda env, **kwargs: RandomAgent(env, **kwargs))

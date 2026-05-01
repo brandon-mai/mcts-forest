@@ -3,31 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import math
-from numba import njit
 from typing import Tuple, Dict, Any
 from mcts_forest.core.base import TorchModelAdapter, ExperienceBuffer
 
-@njit(cache=True)
-def mu_pmean_backup(p, gamma, v_leaf, path_vis, path_rew, path_children_vis, path_children_q, path_len):
-    """Numba-accelerated Power-Mean backpropagation for MuZero search path."""
-    v_back = v_leaf
-    v_trace = np.zeros(path_len, dtype=np.float32)
-    for i in range(path_len - 1, -1, -1):
-        n_p = path_vis[i] + 1
-        if path_children_vis[i].sum() == 0:
-            v_back = v_leaf # Should not happen for internal nodes
-        else:
-            w_sum = 0.0
-            for a in range(len(path_children_vis[i])):
-                n_a = path_children_vis[i, a]
-                if n_a > 0:
-                    q_shifted = max(0.0, float(path_children_q[i, a]) + 1.0)
-                    w_sum += (n_a / n_p) * (q_shifted ** p)
-            v_back = (w_sum ** (1.0 / p)) - 1.0
-        v_trace[i] = v_back
-    return v_trace
-
-class GSPMuZeroNet(nn.Module):
+class MuZeroNet(nn.Module):
     def __init__(self, obs_dim=16, n_actions=4, latent_dim=64):
         super().__init__()
         self.latent_dim = latent_dim
@@ -53,20 +32,20 @@ class MuZeroNode:
         self.reward = 0.0
     def value(self): return float(self.value_sum / self.visit_count) if self.visit_count > 0 else 0.0
 
-class GSPMuZero:
-    def __init__(self, env, model_adapter: TorchModelAdapter, c_puct=1.25, p=2.0, gamma=0.99, simulation_limit=100, **kwargs):
+class MuZero:
+    def __init__(self, env, model_adapter: TorchModelAdapter, c_puct=1.25, gamma=0.99, simulation_limit=100, **kwargs):
         self.model = model_adapter.model.to(model_adapter.device)
-        self.device, self.c_puct, self.p, self.gamma, self.simulation_limit = model_adapter.device, c_puct, p, gamma, simulation_limit
-        # Get dimensions from environment
+        self.device, self.c_puct, self.gamma, self.simulation_limit = model_adapter.device, c_puct, gamma, simulation_limit
         self.obs_dim = env.observation_space.n if hasattr(env.observation_space, 'n') else env.observation_space.shape[0]
         self.n_actions = env.action_space.n
 
     def search(self, state_idx: int) -> Tuple[int, Dict[str, Any]]:
         self.model.eval()
         n_sim = self.simulation_limit
-        horizon = int(math.ceil(math.log(n_sim) / (2 * math.log(1.0 / self.gamma)))) if self.gamma < 1.0 else 100
+        horizon = 100
         
         with torch.no_grad():
+            # Handle discrete state space (FrozenLake style)
             s_oh = torch.zeros(1, self.obs_dim).to(self.device); s_oh[0, state_idx] = 1.0
             h0 = self.model.represent(s_oh)
             pi_logits, _ = self.model.predict(h0)
@@ -76,7 +55,6 @@ class GSPMuZero:
             for _ in range(n_sim):
                 node, search_path, h_depth = root, [root], 0
                 while node.children and h_depth < horizon:
-                    # Optimized selection
                     best_s, best_a = -1e18, -1
                     sqrt_n = math.sqrt(node.visit_count) if node.visit_count > 0 else 1.0
                     for a, child in node.children.items():
@@ -102,23 +80,19 @@ class GSPMuZero:
                 for i in range(len(search_path)-1, -1, -1):
                     curr = search_path[i]
                     curr.visit_count += 1
-                    if not curr.children: curr.value_sum = float(v_back) * curr.visit_count
+                    # Standard Arithmetic Mean Backup
+                    if not curr.children: 
+                        curr.value_sum = float(v_back) * curr.visit_count
                     else:
-                        # Calculate q values for children and find q_min
-                        qs = []
+                        # Mean of children values
+                        total_q = 0.0
+                        count = 0
                         for child in curr.children.values():
                             if child.visit_count > 0:
-                                qs.append(child.reward + self.gamma * child.value())
-                        
-                        curr_shift = max(0.0, -min(qs)) + 1.0 if qs else 1.0
-                        
-                        w_sum = 0.0
-                        for child in curr.children.values():
-                            if child.visit_count > 0:
-                                q_val = (child.reward + self.gamma * child.value()) + curr_shift
-                                if q_val < 0.0: q_val = 0.0
-                                w_sum += (child.visit_count / curr.visit_count) * (q_val ** self.p)
-                        v_back = (w_sum ** (1.0 / self.p)) - curr_shift
+                                q = child.reward + self.gamma * child.value()
+                                total_q += q
+                                count += 1
+                        v_back = total_q / count if count > 0 else v_leaf
                         curr.value_sum = float(v_back) * curr.visit_count
                     
         counts = np.array([root.children[a].visit_count for a in range(self.n_actions)])

@@ -8,8 +8,8 @@ from mcts_forest.core.base import TorchModelAdapter, ExperienceBuffer
 from mcts_forest.core.gsp_muzero import GSPMuZeroNet, MuZeroNode
 
 class GSPStochasticMuZeroNet(GSPMuZeroNet):
-    def __init__(self, n_states=16, n_actions=4, latent_dim=64, num_outcomes=3):
-        super().__init__(n_states, n_actions, latent_dim)
+    def __init__(self, obs_dim=16, n_actions=4, latent_dim=64, num_outcomes=3):
+        super().__init__(obs_dim, n_actions, latent_dim)
         self.num_outcomes = num_outcomes
         self.afterstate_h = nn.Sequential(nn.Linear(latent_dim + n_actions, latent_dim), nn.ReLU())
         self.outcome_dynamics = nn.Sequential(nn.Linear(latent_dim + num_outcomes, latent_dim), nn.ReLU())

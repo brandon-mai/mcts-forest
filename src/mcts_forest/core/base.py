@@ -54,7 +54,8 @@ class ExperienceBuffer:
             with open(path, 'rb') as f:
                 self.buffer = pickle.load(f)
 
-    def get_batches(self, batch_size: int, input_transform=None):
+    def get_batches(self, batch_size: int):
+        if not self.buffer: return
         indices = np.arange(len(self.buffer))
         np.random.shuffle(indices)
         for i in range(0, len(self.buffer), batch_size):
@@ -62,7 +63,6 @@ class ExperienceBuffer:
             states, policies, values = [], [], []
             for idx in batch_idx:
                 s, p, v = self.buffer[idx]
-                if input_transform: s = input_transform(s)
                 states.append(s)
                 policies.append(p)
                 values.append(v)
@@ -70,20 +70,11 @@ class ExperienceBuffer:
 
 class TorchModelAdapter:
     """Standardized adapter for Neural MCTS solvers."""
-    def __init__(self, model: nn.Module, device=None, n_states=16):
+    def __init__(self, model: nn.Module, device=None):
         self.model = model
         self.device = device if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
         self.model.eval()
-        self.n_states = n_states
-
-    def predict_all(self):
-        with torch.no_grad():
-            states_oh = torch.eye(self.n_states).to(self.device)
-            pi_logits, v_tensors = self.model(states_oh)
-            priors = F.softmax(pi_logits, dim=-1).cpu().numpy()
-            values = v_tensors.squeeze().cpu().numpy()
-        return values.astype(np.float32), priors.astype(np.float32)
 
     def save(self, path: str):
         torch.save(self.model.state_dict(), path)
