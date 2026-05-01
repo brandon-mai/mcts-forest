@@ -1,0 +1,35 @@
+[project]
+name = "mcts-forest"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "gymnasium[classic-control,other,toy-text]>=1.2.3",
+    "matplotlib>=3.10.8",
+    "moviepy>=2.2.1",
+    "numba>=0.65.0",
+    "numpy>=2.4.4",
+    "pandas>=3.0.2",
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+    "rich>=15.0.0",
+    "setuptools<70.0.0",
+    "torch>=2.11.0",
+    "torchaudio>=2.11.0",
+    "torchvision>=0.26.0",
+    "tqdm>=4.67.3",
+]
+
+[tool.uv]
+package = true
+
+[project.scripts]
+benchmark = "mcts_forest.scripts.benchmark:main"
+train = "mcts_forest.scripts.train_loop:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+norecursedirs = ["gymcts_original", ".venv", ".git", "results"]
+addopts = "--verbose --cov=src --cov-report=term-missing"
