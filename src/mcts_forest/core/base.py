@@ -19,7 +19,7 @@ def sample_discrete_transition(state, action, transitions, rewards, dones, probs
     return transitions[state, action, outcome_idx], rewards[state, action, outcome_idx], dones[state, action, outcome_idx]
 
 @njit(cache=True)
-def random_rollout_discrete(state, transitions, rewards, dones, probs_cum, limit, gamma):
+def random_rollout_discrete(state, transitions, rewards, dones, probs_cum, limit, gamma, reward_offset, reward_scale):
     curr_s = state
     total_r = 0.0
     curr_g = 1.0
@@ -27,7 +27,9 @@ def random_rollout_discrete(state, transitions, rewards, dones, probs_cum, limit
     for _ in range(limit):
         a = np.random.randint(0, num_actions)
         next_s, r, done = sample_discrete_transition(curr_s, a, transitions, rewards, dones, probs_cum)
-        total_r += curr_g * r
+        # Apply internal transformation
+        r_int = (r + reward_offset) * reward_scale
+        total_r += curr_g * r_int
         curr_g *= gamma
         curr_s = next_s
         if done: break

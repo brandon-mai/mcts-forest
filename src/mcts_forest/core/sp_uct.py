@@ -12,7 +12,7 @@ def sp_uct_core(n_sim, horizon, c, gamma, p, rollout_limit, dynamics, T_s, Q_hat
     transitions, rewards, dones, probs_cum = dynamics
     for _ in range(n_sim):
         curr_node, curr_h = 0, 0
-        p_nodes, p_a, p_r, p_next_s = np.empty(101, dtype=np.int32), np.empty(101, dtype=np.int32), np.empty(101, dtype=np.float32), np.empty(101, dtype=np.int32)
+        p_nodes, p_a, p_r, p_next_s = np.empty(horizon + 1, dtype=np.int32), np.empty(horizon + 1, dtype=np.int32), np.empty(horizon + 1, dtype=np.float32), np.empty(horizon + 1, dtype=np.int32)
         p_len = 0
         v_leaf = 0.0
         
@@ -53,17 +53,14 @@ def sp_uct_core(n_sim, horizon, c, gamma, p, rollout_limit, dynamics, T_s, Q_hat
                 new_id = node_counter[0]
                 node_counter[0] += 1
                 child_nodes[key], node_states[new_id] = new_id, next_s
-                v_leaf_raw = random_rollout_discrete(next_s, transitions, rewards, dones, probs_cum, rollout_limit, gamma)
-                # Simplified leaf normalization:
-                v_leaf = (v_leaf_raw + reward_offset / (1-gamma)) * reward_scale if gamma < 1.0 else (v_leaf_raw + reward_offset * rollout_limit) * reward_scale
+                v_leaf = random_rollout_discrete(next_s, transitions, rewards, dones, probs_cum, rollout_limit, gamma, reward_offset, reward_scale)
                 
                 V_hat[new_id] = v_leaf
                 T_s[new_id] = 1
                 break
             curr_node, curr_h = next_node, curr_h + 1
         else:
-            v_leaf_raw = random_rollout_discrete(node_states[curr_node], transitions, rewards, dones, probs_cum, rollout_limit, gamma)
-            v_leaf = (v_leaf_raw + reward_offset / (1-gamma)) * reward_scale if gamma < 1.0 else (v_leaf_raw + reward_offset * rollout_limit) * reward_scale
+            v_leaf = random_rollout_discrete(node_states[curr_node], transitions, rewards, dones, probs_cum, rollout_limit, gamma, reward_offset, reward_scale)
 
         # Backpropagation (SimulateV/Q recursive equivalent)
         v_back = v_leaf
@@ -80,22 +77,33 @@ def sp_uct_core(n_sim, horizon, c, gamma, p, rollout_limit, dynamics, T_s, Q_hat
                 if T_sa[n_id, act] > 0 and Q_hat[n_id, act] < q_min:
                     q_min = Q_hat[n_id, act]
             
-            curr_shift = max(0.0, -q_min) + 1.0
-            weighted_sum = 0.0
-            for act in range(Q_hat.shape[1]):
-                n_act = T_sa[n_id, act]
-                if n_act > 0:
-                    q_val = Q_hat[n_id, act] + curr_shift
-                    if q_val < 0.0: q_val = 0.0
-                    weighted_sum += (n_act / n_p) * (q_val ** p)
-            
-            V_hat[n_id] = (weighted_sum ** (1.0 / p)) - curr_shift
+            curr_shift = max(0.0, -q_min) + reward_scale
+            if math.isinf(p):
+                max_q = -1e18
+                for act in range(Q_hat.shape[1]):
+                    if T_sa[n_id, act] > 0 and Q_hat[n_id, act] > max_q:
+                        max_q = Q_hat[n_id, act]
+                V_hat[n_id] = max_q
+            else:
+                weighted_sum = 0.0
+                for act in range(Q_hat.shape[1]):
+                    n_act = T_sa[n_id, act]
+                    if n_act > 0:
+                        q_val = Q_hat[n_id, act] + curr_shift
+                        if q_val < 0.0: q_val = 0.0
+                        weighted_sum += (n_act / n_p) * (q_val ** p)
+                V_hat[n_id] = (weighted_sum ** (1.0 / p)) - curr_shift
             v_back = V_hat[n_id]
 
 class SPUCT:
     def __init__(self, env, c=1.0, p=2.0, horizon=100, gamma=0.99, rollout_limit=100, simulation_limit=1000, 
                  internal_reward_offset=0.0, internal_reward_scale=1.0, init_q=0.0, **kwargs):
-        self.env, self.c, self.p, self.horizon, self.gamma, self.rollout_limit, self.simulation_limit = env, c, p, horizon, gamma, rollout_limit, simulation_limit
+        self.env, self.c = env, c
+        if p == 'inf':
+            self.p = np.inf
+        else:
+            self.p = float(p)
+        self.horizon, self.gamma, self.rollout_limit, self.simulation_limit = horizon, gamma, rollout_limit, simulation_limit
         self.reward_offset = internal_reward_offset
         self.reward_scale = internal_reward_scale
         self.init_q = init_q

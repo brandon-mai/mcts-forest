@@ -8,11 +8,14 @@ from mcts_forest.core.base import sample_discrete_transition, random_rollout_dis
 from mcts_forest.utils.visualizer import SurrogateNode
 
 @njit(cache=True)
-def stochastic_uct_core(n_sim, horizon, c, gamma, rollout_limit, dynamics, visit_count, q_hat, action_visits, child_nodes, node_states, node_counter):
+def stochastic_uct_core(n_sim, horizon, c, gamma, rollout_limit, dynamics, visit_count, q_hat, action_visits, child_nodes, node_states, node_counter, reward_offset, reward_scale):
     transitions, rewards, dones, probs_cum = dynamics
+    p_nodes = np.empty(horizon + 1, dtype=np.int32)
+    p_a = np.empty(horizon + 1, dtype=np.int32)
+    p_r_int = np.empty(horizon + 1, dtype=np.float32)
+    
     for _ in range(n_sim):
         curr_node, curr_h = 0, 0
-        p_nodes, p_a, p_r = np.empty(101, dtype=np.int32), np.empty(101, dtype=np.int32), np.empty(101, dtype=np.float32)
         p_len = 0
         v_leaf = 0.0
         while curr_h < horizon:
@@ -33,6 +36,9 @@ def stochastic_uct_core(n_sim, horizon, c, gamma, rollout_limit, dynamics, visit
             a = best_a
             next_s, r, done = sample_discrete_transition(s_idx, a, transitions, rewards, dones, probs_cum)
             
+            # Internal normalization
+            r_int = (r + reward_offset) * reward_scale
+            
             # Stochastic Mapping: (node, action, next_state) -> next_node
             key = (np.int32(curr_node), np.int32(a), np.int32(next_s))
             
@@ -41,7 +47,7 @@ def stochastic_uct_core(n_sim, horizon, c, gamma, rollout_limit, dynamics, visit
             else:
                 next_node = -1
                 
-            p_nodes[p_len], p_a[p_len], p_r[p_len] = curr_node, a, r
+            p_nodes[p_len], p_a[p_len], p_r_int[p_len] = curr_node, a, r_int
             p_len += 1
             
             if done:
@@ -51,44 +57,42 @@ def stochastic_uct_core(n_sim, horizon, c, gamma, rollout_limit, dynamics, visit
                 new_id = node_counter[0]
                 node_counter[0] += 1
                 child_nodes[key], node_states[new_id] = new_id, next_s
-                v_leaf = random_rollout_discrete(next_s, transitions, rewards, dones, probs_cum, rollout_limit, gamma)
+                v_leaf = random_rollout_discrete(next_s, transitions, rewards, dones, probs_cum, rollout_limit, gamma, reward_offset, reward_scale)
                 visit_count[new_id] = 1
                 break
             curr_node, curr_h = next_node, curr_h + 1
         else:
-            v_leaf = random_rollout_discrete(node_states[curr_node], transitions, rewards, dones, probs_cum, rollout_limit, gamma)
+            v_leaf = random_rollout_discrete(node_states[curr_node], transitions, rewards, dones, probs_cum, rollout_limit, gamma, reward_offset, reward_scale)
 
         # Backpropagation
         v_nxt = v_leaf
         for i in range(p_len - 1, -1, -1):
-            n_id, a, r = p_nodes[i], p_a[i], p_r[i]
+            n_id, a, r_int = p_nodes[i], p_a[i], p_r_int[i]
             action_visits[n_id, a] += 1
             nv = action_visits[n_id, a]
-            # Q is updated by ALL returns following this (node, action)
-            q_hat[n_id, a] += (r + gamma * v_nxt - q_hat[n_id, a]) / nv
+            q_hat[n_id, a] += (r_int + gamma * v_nxt - q_hat[n_id, a]) / nv
             visit_count[n_id] += 1
-            # v_nxt for parent is the return from this node onwards
-            # In stochastic UCT, we can use the expected value of current node as v_nxt
-            # Standard MCTS uses the return of the CURRENT simulation
-            v_nxt = r + gamma * v_nxt
+            v_nxt = r_int + gamma * v_nxt
 
 class StochasticUCT:
-    def __init__(self, env, c=1.414, horizon=100, gamma=0.99, rollout_limit=100, simulation_limit=1000, **kwargs):
+    def __init__(self, env, c=1.0, horizon=100, gamma=0.99, rollout_limit=100, simulation_limit=1000, 
+                 internal_reward_offset=0.0, internal_reward_scale=1.0, init_q=0.0, **kwargs):
         self.env, self.c, self.horizon, self.gamma, self.rollout_limit, self.simulation_limit = env, c, horizon, gamma, rollout_limit, simulation_limit
+        self.reward_offset = internal_reward_offset
+        self.reward_scale = internal_reward_scale
+        self.init_q = init_q
         self.dynamics = env.get_numba_dynamics()
 
     def search(self, initial_state: int) -> Tuple[int, Dict[str, Any]]:
-        max_n = self.simulation_limit * 3 + 1 # Higher node limit for stochasticity
-        v_count, q_hat, a_visits = np.zeros(max_n, dtype=np.int32), np.full((max_n, self.dynamics[0].shape[1]), -100.0, dtype=np.float32), np.zeros((max_n, self.dynamics[0].shape[1]), dtype=np.int32)
+        max_n = self.simulation_limit * 3 + 1
+        v_count, q_hat, a_visits = np.zeros(max_n, dtype=np.int32), np.full((max_n, self.dynamics[0].shape[1]), self.init_q, dtype=np.float32), np.zeros((max_n, self.dynamics[0].shape[1]), dtype=np.int32)
         n_states, n_counter = np.zeros(max_n, dtype=np.int32), np.array([1], dtype=np.int32)
         n_states[0] = initial_state
         child_nodes = NumbaDict.empty(key_type=numba.types.Tuple((numba.int32, numba.int32, numba.int32)), value_type=numba.int32)
         
-        stochastic_uct_core(self.simulation_limit, self.horizon, self.c, self.gamma, self.rollout_limit, self.dynamics, v_count, q_hat, a_visits, child_nodes, n_states, n_counter)
+        stochastic_uct_core(self.simulation_limit, self.horizon, self.c, self.gamma, self.rollout_limit, self.dynamics, v_count, q_hat, a_visits, child_nodes, n_states, n_counter, self.reward_offset, self.reward_scale)
         
-        root = None
-        # root = SurrogateNode(0, v_count, q_hat, dict(child_nodes), a_visits=a_visits)
-        return int(np.argmax(q_hat[0])), {"root": root, "root_v": float(np.max(q_hat[0]))}
+        return int(np.argmax(q_hat[0])), {"root": None, "root_v": float(np.max(q_hat[0]))}
 
     def get_name(self) -> str:
         return f"stochastic_uct_sim{self.simulation_limit}"

@@ -8,12 +8,12 @@ from mcts_forest.core.base import sample_discrete_transition, random_rollout_dis
 from mcts_forest.utils.visualizer import SurrogateNode
 
 @njit(cache=True)
-def openloop_mcts_core(n_sim, horizon, initial_state, c, gamma, rollout_limit, dynamics, visit_count, q_hat, action_visits, child_nodes, node_counter):
+def openloop_mcts_core(n_sim, horizon, initial_state, c, gamma, rollout_limit, dynamics, visit_count, q_hat, action_visits, child_nodes, node_counter, reward_offset, reward_scale):
     transitions, rewards, dones, probs_cum = dynamics
     for _ in range(n_sim):
         curr_node, curr_h = 0, 0
         curr_s = initial_state
-        p_nodes, p_a, p_r = np.empty(101, dtype=np.int32), np.empty(101, dtype=np.int32), np.empty(101, dtype=np.float32)
+        p_nodes, p_a, p_r_int = np.empty(horizon + 1, dtype=np.int32), np.empty(horizon + 1, dtype=np.int32), np.empty(horizon + 1, dtype=np.float32)
         p_len = 0
         v_leaf = 0.0
         
@@ -34,13 +34,16 @@ def openloop_mcts_core(n_sim, horizon, initial_state, c, gamma, rollout_limit, d
             # Sample environment transition for the chosen action sequence step
             next_s, r, done = sample_discrete_transition(curr_s, a, transitions, rewards, dones, probs_cum)
             
+            # Internal normalization
+            r_int = (r + reward_offset) * reward_scale
+            
             key = (np.int32(curr_node), np.int32(a))
             if key in child_nodes:
                 next_node = child_nodes[key]
             else:
                 next_node = -1
                 
-            p_nodes[p_len], p_a[p_len], p_r[p_len] = curr_node, a, r
+            p_nodes[p_len], p_a[p_len], p_r_int[p_len] = curr_node, a, r_int
             p_len += 1
             
             if done:
@@ -51,26 +54,29 @@ def openloop_mcts_core(n_sim, horizon, initial_state, c, gamma, rollout_limit, d
                 new_id = node_counter[0]
                 node_counter[0] += 1
                 child_nodes[key] = new_id
-                v_leaf = random_rollout_discrete(next_s, transitions, rewards, dones, probs_cum, rollout_limit, gamma)
+                v_leaf = random_rollout_discrete(next_s, transitions, rewards, dones, probs_cum, rollout_limit, gamma, reward_offset, reward_scale)
                 visit_count[new_id] = 1
                 break
             curr_node, curr_h, curr_s = next_node, curr_h + 1, next_s
         else:
-            v_leaf = random_rollout_discrete(curr_s, transitions, rewards, dones, probs_cum, rollout_limit, gamma)
+            v_leaf = random_rollout_discrete(curr_s, transitions, rewards, dones, probs_cum, rollout_limit, gamma, reward_offset, reward_scale)
 
         # Backpropagation
         v_nxt = v_leaf
         for i in range(p_len - 1, -1, -1):
-            n_id, a, r = p_nodes[i], p_a[i], p_r[i]
+            n_id, a, r_int = p_nodes[i], p_a[i], p_r_int[i]
             action_visits[n_id, a] += 1
             nv = action_visits[n_id, a]
-            q_hat[n_id, a] += (r + gamma * v_nxt - q_hat[n_id, a]) / nv
+            q_hat[n_id, a] += (r_int + gamma * v_nxt - q_hat[n_id, a]) / nv
             visit_count[n_id] += 1
-            v_nxt = r + gamma * v_nxt
+            v_nxt = r_int + gamma * v_nxt
 
 class OpenLoopMCTS:
-    def __init__(self, env, c=1.414, horizon=100, gamma=0.99, rollout_limit=100, simulation_limit=1000, **kwargs):
+    def __init__(self, env, c=1.0, horizon=100, gamma=0.99, rollout_limit=100, simulation_limit=1000, 
+                 internal_reward_offset=0.0, internal_reward_scale=1.0, **kwargs):
         self.env, self.c, self.horizon, self.gamma, self.rollout_limit, self.simulation_limit = env, c, horizon, gamma, rollout_limit, simulation_limit
+        self.reward_offset = internal_reward_offset
+        self.reward_scale = internal_reward_scale
         self.dynamics = env.get_numba_dynamics()
 
     def search(self, initial_state: int) -> Tuple[int, Dict[str, Any]]:
@@ -80,11 +86,9 @@ class OpenLoopMCTS:
         n_counter = np.array([1], dtype=np.int32)
         child_nodes = NumbaDict.empty(key_type=numba.types.Tuple((numba.int32, numba.int32)), value_type=numba.int32)
         
-        openloop_mcts_core(self.simulation_limit, self.horizon, initial_state, self.c, self.gamma, self.rollout_limit, self.dynamics, v_count, q_hat, a_visits, child_nodes, n_counter)
+        openloop_mcts_core(self.simulation_limit, self.horizon, initial_state, self.c, self.gamma, self.rollout_limit, self.dynamics, v_count, q_hat, a_visits, child_nodes, n_counter, self.reward_offset, self.reward_scale)
         
-        root = None
-        # root = SurrogateNode(0, v_count, q_hat, dict(child_nodes), a_visits=a_visits)
-        return int(np.argmax(q_hat[0])), {"root": root, "root_v": float(np.max(q_hat[0]))}
+        return int(np.argmax(q_hat[0])), {"root": None, "root_v": float(np.max(q_hat[0]))}
 
     def get_name(self) -> str:
         return f"openloop_sim{self.simulation_limit}"

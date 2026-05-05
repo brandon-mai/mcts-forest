@@ -7,58 +7,14 @@ from typing import Tuple, Dict, Any
 from mcts_forest.core.base import sample_discrete_transition, random_rollout_discrete
 
 @njit(cache=True)
-def eager_graph_rollout(s, rollout_depth, rollout_limit, transitions, rewards, dones, probs_cum, gamma, state_to_node, node_states, node_counter, V_hat, T_s, reward_offset, reward_scale):
-    # This rollout populates the graph as it goes (Algorithm 2)
-    path_s = np.empty(rollout_depth + 1, dtype=np.int32)
-    path_r_int = np.empty(rollout_depth, dtype=np.float32)
-    path_s[0] = s
-    curr_s = s
-    curr_len = 0
-    final_v_int = 0.0
-    
-    # 1. Simulate path and add to graph
-    for i in range(rollout_depth):
-        n_actions = transitions.shape[1]
-        a = np.random.randint(0, n_actions)
-        next_s, r, done = sample_discrete_transition(curr_s, a, transitions, rewards, dones, probs_cum)
-        
-        # Internal normalization
-        r_int = (r + reward_offset) * reward_scale
-        
-        path_r_int[i] = r_int
-        path_s[i+1] = next_s
-        curr_len += 1
-        
-        if next_s not in state_to_node:
-            new_id = node_counter[0]
-            node_counter[0] += 1
-            state_to_node[np.int32(next_s)] = new_id
-            node_states[new_id] = next_s
-            V_hat[new_id] = -1.0 # Initial floor (normalized) - maybe use a parameter?
-            T_s[new_id] = 0
-
-        if done:
-            final_v_int = 0.0
-            break
-        curr_s = next_s
-    else:
-        # Final blind rollout
-        v_leaf_raw = random_rollout_discrete(curr_s, transitions, rewards, dones, probs_cum, rollout_limit, gamma)
-        final_v_int = (v_leaf_raw + reward_offset * (1 - gamma**rollout_limit)/(1-gamma)) * reward_scale if gamma < 1.0 else (v_leaf_raw + reward_offset * rollout_limit) * reward_scale
-        
-    # 2. Back-calculate discounted value
-    v_ret = final_v_int
-    for i in range(curr_len - 1, -1, -1):
-        v_ret = path_r_int[i] + gamma * v_ret
-    return v_ret
-
-@njit(cache=True)
-def gsp_uct_full_core(n_sim, horizon, initial_state, c, b, alpha, beta, gamma, p, rollout_depth, rollout_limit, dynamics, T_s, Q_hat, V_hat, T_sa, state_to_node, node_states, node_counter, reward_offset, reward_scale):
+def gsp_uct_full_core(n_sim, horizon, initial_state, c, gamma, p, rollout_limit, dynamics, T_s, Q_hat, V_hat, T_sa, state_to_node, node_states, node_counter, reward_offset, reward_scale):
     transitions, rewards, dones, probs_cum = dynamics
+    p_nodes = np.empty(horizon + 1, dtype=np.int32)
+    p_a = np.empty(horizon + 1, dtype=np.int32)
+    p_r_int = np.empty(horizon + 1, dtype=np.float32)
+    
     for _ in range(n_sim):
         curr_node, curr_h = 0, 0
-        curr_s = initial_state
-        p_nodes, p_a, p_r_int = np.empty(1001, dtype=np.int32), np.empty(1001, dtype=np.int32), np.empty(1001, dtype=np.float32)
         p_len = 0
         v_leaf = 0.0
         
@@ -71,7 +27,7 @@ def gsp_uct_full_core(n_sim, horizon, initial_state, c, b, alpha, beta, gamma, p
                 if n_sa == 0:
                     best_a = a
                     break
-                bonus = c * (n_p ** (b / beta) / n_sa ** (alpha / beta))
+                bonus = c * (n_p ** 0.25 / n_sa ** 0.5)
                 val = Q_hat[curr_node, a] + bonus
                 if val > best_val:
                     best_val, best_a = val, a
@@ -95,23 +51,20 @@ def gsp_uct_full_core(n_sim, horizon, initial_state, c, b, alpha, beta, gamma, p
                 v_leaf = 0.0
                 break
             if next_node == -1:
+                # Expand Node
                 new_id = node_counter[0]
                 node_counter[0] += 1
-                state_to_node[s_key] = new_id
+                state_to_node[np.int32(next_s)] = new_id
                 node_states[new_id] = next_s
-                v_leaf = eager_graph_rollout(next_s, rollout_depth, rollout_limit, transitions, rewards, dones, probs_cum, gamma, state_to_node, node_states, node_counter, V_hat, T_s, reward_offset, reward_scale)
+                v_leaf = random_rollout_discrete(next_s, transitions, rewards, dones, probs_cum, rollout_limit, gamma, reward_offset, reward_scale)
+                
                 V_hat[new_id] = v_leaf
                 T_s[new_id] = 1
                 break
             
-            if p_len >= 1000:
-                v_leaf = V_hat[next_node]
-                break
-                
-            curr_node, curr_h, curr_s = next_node, curr_h + 1, next_s
+            curr_node, curr_h = next_node, curr_h + 1
         else:
-            v_leaf_raw = random_rollout_discrete(node_states[curr_node], transitions, rewards, dones, probs_cum, rollout_limit, gamma)
-            v_leaf = (v_leaf_raw + reward_offset * (1 - gamma**rollout_limit)/(1-gamma)) * reward_scale if gamma < 1.0 else (v_leaf_raw + reward_offset * rollout_limit) * reward_scale
+            v_leaf = random_rollout_discrete(node_states[curr_node], transitions, rewards, dones, probs_cum, rollout_limit, gamma, reward_offset, reward_scale)
 
         v_back = v_leaf
         for i in range(p_len - 1, -1, -1):
@@ -126,23 +79,34 @@ def gsp_uct_full_core(n_sim, horizon, initial_state, c, b, alpha, beta, gamma, p
             for act in range(Q_hat.shape[1]):
                 if T_sa[n_id, act] > 0 and Q_hat[n_id, act] < q_min:
                     q_min = Q_hat[n_id, act]
-            curr_shift = max(0.0, -q_min) + 1.0
+            curr_shift = max(0.0, -q_min) + reward_scale
             
-            weighted_sum = 0.0
-            for act in range(Q_hat.shape[1]):
-                n_act = T_sa[n_id, act]
-                if n_act > 0:
-                    q_val = Q_hat[n_id, act] + curr_shift
-                    if q_val < 0.0: q_val = 0.0
-                    weighted_sum += (n_act / n_p) * (q_val ** p)
-            V_hat[n_id] = (weighted_sum ** (1.0 / p)) - curr_shift
+            if math.isinf(p):
+                max_q = -1e18
+                for act in range(Q_hat.shape[1]):
+                    if T_sa[n_id, act] > 0 and Q_hat[n_id, act] > max_q:
+                        max_q = Q_hat[n_id, act]
+                V_hat[n_id] = max_q
+            else:
+                weighted_sum = 0.0
+                for act in range(Q_hat.shape[1]):
+                    n_act = T_sa[n_id, act]
+                    if n_act > 0:
+                        q_val = Q_hat[n_id, act] + curr_shift
+                        if q_val < 0.0: q_val = 0.0
+                        weighted_sum += (n_act / n_p) * (q_val ** p)
+                V_hat[n_id] = (weighted_sum ** (1.0 / p)) - curr_shift
             v_back = V_hat[n_id]
 
 class GSPUCTFull:
-    def __init__(self, env, c=1.0, b=0.25, alpha=0.5, beta=1.0, p=2.0, rollout_depth=5, gamma=0.99, rollout_limit=100, simulation_limit=1000, 
+    def __init__(self, env, c=1.0, p=2.0, gamma=0.98, rollout_limit=100, simulation_limit=1000, 
                  internal_reward_offset=0.0, internal_reward_scale=1.0, init_q=0.0, **kwargs):
-        self.env, self.c, self.b, self.alpha, self.beta = env, c, b, alpha, beta
-        self.p, self.rollout_depth, self.gamma, self.rollout_limit, self.simulation_limit = p, rollout_depth, gamma, rollout_limit, simulation_limit
+        self.env, self.c = env, c
+        if p == 'inf':
+            self.p = np.inf
+        else:
+            self.p = float(p)
+        self.gamma, self.rollout_limit, self.simulation_limit = gamma, rollout_limit, simulation_limit
         self.reward_offset = internal_reward_offset
         self.reward_scale = internal_reward_scale
         self.init_q = init_q
@@ -150,7 +114,7 @@ class GSPUCTFull:
         self.horizon = int(math.ceil(math.log(self.simulation_limit) / (2 * math.log(1.0 / self.gamma))))
 
     def search(self, initial_state: int) -> Tuple[int, Dict[str, Any]]:
-        max_n = self.simulation_limit * (self.rollout_depth + 1) + 1
+        max_n = self.simulation_limit * 10 + 1
         T_s, Q_hat, V_hat = np.zeros(max_n, dtype=np.int32), np.full((max_n, self.dynamics[0].shape[1]), self.init_q, dtype=np.float32), np.full(max_n, self.init_q, dtype=np.float32)
         T_sa, n_states, n_counter = np.zeros((max_n, self.dynamics[0].shape[1]), dtype=np.int32), np.zeros(max_n, dtype=np.int32), np.array([1], dtype=np.int32)
         
@@ -158,7 +122,7 @@ class GSPUCTFull:
         state_to_node = NumbaDict.empty(key_type=numba.types.int32, value_type=numba.types.int32)
         state_to_node[np.int32(initial_state)] = np.int32(0)
         
-        gsp_uct_full_core(self.simulation_limit, self.horizon, initial_state, self.c, self.b, self.alpha, self.beta, self.gamma, self.p, self.rollout_depth, self.rollout_limit, self.dynamics, T_s, Q_hat, V_hat, T_sa, state_to_node, n_states, n_counter, self.reward_offset, self.reward_scale)
+        gsp_uct_full_core(self.simulation_limit, self.horizon, initial_state, self.c, self.gamma, self.p, self.rollout_limit, self.dynamics, T_s, Q_hat, V_hat, T_sa, state_to_node, n_states, n_counter, self.reward_offset, self.reward_scale)
         
         return int(np.argmax(Q_hat[0])), {"root_v": float(V_hat[0]), "horizon": self.horizon, "nodes": int(n_counter[0])}
 
