@@ -27,7 +27,7 @@ def test_rollout_reward_range(deterministic_frozen_lake):
     dynamics = deterministic_frozen_lake.get_numba_dynamics()
     obs = deterministic_frozen_lake.reset()
     
-    reward = random_rollout_discrete(obs, *dynamics, limit=100, gamma=0.99)
+    reward = random_rollout_discrete(obs, *dynamics, limit=100, gamma=0.99, reward_offset=0.0, reward_scale=1.0)
     assert 0.0 <= reward <= 1.0
 
 def test_uct_info_consistency(deterministic_frozen_lake):

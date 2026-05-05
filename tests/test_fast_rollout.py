@@ -70,10 +70,10 @@ def test_numba_rollout_equivalence(success_rate):
     # --- 2. Collection via numba_rollout() ---
     nb_rewards = []
     # Warmup JIT
-    numba_rollout(init_state, dynamics[0], dynamics[1], dynamics[2], dynamics[3], rollout_limit, gamma)
+    numba_rollout(init_state, dynamics[0], dynamics[1], dynamics[2], dynamics[3], rollout_limit, gamma, 0.0, 1.0)
     
     for _ in range(num_trials):
-        r = numba_rollout(init_state, *dynamics, rollout_limit, gamma)
+        r = numba_rollout(init_state, *dynamics, rollout_limit, gamma, 0.0, 1.0)
         nb_rewards.append(r)
     
     # --- 3. Statistical Comparison ---
@@ -131,7 +131,7 @@ def test_taxi_rollout_equivalence(env_name):
     # 2. Numba
     nb_rewards = []
     for _ in range(num_trials):
-        nb_rewards.append(numba_rollout(init_state, *dynamics, rollout_limit, gamma))
+        nb_rewards.append(numba_rollout(init_state, *dynamics, rollout_limit, gamma, 0.0, 1.0))
     
     # 3. Statistical Comparison
     std_mean, std_std = np.mean(std_rewards), np.std(std_rewards)

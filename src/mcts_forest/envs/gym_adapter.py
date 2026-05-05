@@ -53,6 +53,15 @@ class GymAdapter(EnvBase):
         # Remove versioning -v0, -v1, etc.
         name = re.sub(r'-v\d+$', '', self.env_id).lower()
         
+        if "taxi" in name:
+            if self.is_rainy:
+                name += "_rain"
+                # If rainy_probability is set and not default (0.8), add it to name
+                prob = getattr(self.env, "rainy_probability", 0.8)
+                if abs(prob - 0.8) > 1e-6:
+                    name += f"_{prob:.1f}"
+            return name
+        
         if "frozenlake" in name:
             # Handle board size and slippery status
             name = "frozenlake"
@@ -63,10 +72,10 @@ class GymAdapter(EnvBase):
                 
             if self.is_slippery:
                 name += "_slip"
-            return name
-        if "taxi" in name:
-            if self.is_rainy:
-                name += "_rain"
+                # If we have a custom slip probability (though FL-v1 doesn't officially support it as a kwarg yet)
+                prob = getattr(self.env, "slip_probability", None)
+                if prob is not None:
+                    name += f"_{prob:.1f}"
             return name
             
         return name

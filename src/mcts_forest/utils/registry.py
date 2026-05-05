@@ -14,6 +14,7 @@ from mcts_forest.core.gsp_uct import GSPUCT
 from mcts_forest.core.gsp_uct_f import GSPUCTFull
 from mcts_forest.core.gbopd import GBOPD
 from mcts_forest.core.gbop import GBOP
+from mcts_forest.core.ments import MENTS
 from mcts_forest.core.gsp_alphazero import GSPAlphaZero, GSPAlphaZeroNet
 from mcts_forest.core.gsp_muzero import GSPMuZero, GSPMuZeroNet
 from mcts_forest.core.gsp_stochastic_muzero import GSPStochasticMuZero, GSPStochasticMuZeroNet
@@ -29,7 +30,38 @@ class Registry:
 
     def register_env(self, name, factory): self.envs[name.lower()] = factory
     def register_solver(self, name, factory): self.solvers[name.lower()] = factory
-    def get_env(self, name, **kwargs): return self.envs[name.lower()](**kwargs)
+    def get_env(self, name, **kwargs):
+        import re
+        name_lower = name.lower()
+        
+        # 1. Handle probability suffixes like _0.8
+        prob_match = re.search(r'_(\d+\.\d+)$', name_lower)
+        if prob_match:
+            prob = float(prob_match.group(1))
+            base_name = name_lower[:prob_match.start()]
+            
+            # Special case for sailing: extract size if present (e.g., sailing10x10_0.8)
+            sailing_match = re.match(r'sailing(\d+)x(\d+)', base_name)
+            if sailing_match:
+                kwargs["grid_size"] = int(sailing_match.group(1))
+                base_name = "sailing"
+            
+            if base_name in self.envs:
+                if "taxi_rain" in base_name:
+                    kwargs["rainy_probability"] = prob
+                elif "frozenlake_slip" in base_name:
+                    kwargs["success_rate"] = prob 
+                elif base_name == "sailing":
+                    kwargs["wind_keep_probability"] = prob
+                return self.envs[base_name](**kwargs)
+
+        # 2. Handle size-only sailing (e.g., sailing10x10)
+        sailing_match = re.match(r'sailing(\d+)x(\d+)', name_lower)
+        if sailing_match:
+            kwargs["grid_size"] = int(sailing_match.group(1))
+            return self.envs["sailing"](**kwargs)
+            
+        return self.envs[name_lower](**kwargs)
     def get_solver(self, name, env, **kwargs): return self.solvers[name.lower()](env, **kwargs)
 
 REGISTRY = Registry()
@@ -43,9 +75,10 @@ REGISTRY.register_env("frozenlake", lambda **kwargs: GymAdapter("FrozenLake-v1",
 REGISTRY.register_env("frozenlake_slip", lambda **kwargs: GymAdapter("FrozenLake-v1", desc=get_map(4), is_slippery=True, **kwargs))
 REGISTRY.register_env("frozenlake8x8", lambda **kwargs: GymAdapter("FrozenLake-v1", desc=get_map(8), is_slippery=False, **kwargs))
 REGISTRY.register_env("frozenlake8x8_slip", lambda **kwargs: GymAdapter("FrozenLake-v1", desc=get_map(8), is_slippery=True, **kwargs))
-REGISTRY.register_env("taxi", lambda **kwargs: GymAdapter("Taxi-v3", **kwargs))
-REGISTRY.register_env("taxi_rain", lambda **kwargs: GymAdapter("Taxi-v3", is_rainy=True, **kwargs))
+REGISTRY.register_env("taxi", lambda **kwargs: GymAdapter("Taxi-v4", **kwargs))
+REGISTRY.register_env("taxi_rain", lambda **kwargs: GymAdapter("Taxi-v4", is_rainy=True, **kwargs))
 REGISTRY.register_env("cartpole", lambda **kwargs: GymAdapter("CartPole-v1", **kwargs))
+REGISTRY.register_env("sailing", lambda **kwargs: GymAdapter("Sailing-v0", **kwargs))
 
 # 2. Register Solvers
 REGISTRY.register_solver("uct", lambda env, **kwargs: UCT(env, **kwargs))
@@ -57,6 +90,7 @@ REGISTRY.register_solver("gsp_uct", lambda env, **kwargs: GSPUCT(env, **kwargs))
 REGISTRY.register_solver("gsp_uct_f", lambda env, **kwargs: GSPUCTFull(env, **kwargs))
 REGISTRY.register_solver("gbopd", lambda env, **kwargs: GBOPD(env, **kwargs))
 REGISTRY.register_solver("gbop", lambda env, **kwargs: GBOP(env, **kwargs))
+REGISTRY.register_solver("ments", lambda env, **kwargs: MENTS(env, **kwargs))
 
 def _get_zero_solver(env, solver_class, net_class, algo_name, **kwargs):
     model_path = f"checkpoints/{algo_name}/latest.pt"

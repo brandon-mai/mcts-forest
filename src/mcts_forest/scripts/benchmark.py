@@ -70,7 +70,16 @@ def get_solver_class(solver_name: str) -> Any:
         "sp_uct": "SPUCT",
         "openloop_mcts": "OpenLoopMCTS",
         "mcgs": "MCGS",
-        "gsp_uct": "GSPUCT"
+        "gsp_uct": "GSPUCT",
+        "gsp_uct_f": "GSPUCTFull",
+        "gbop": "GBOP",
+        "gbopd": "GBOPD",
+        "ments": "MENTS",
+        "gsp_alphazero": "GSPAlphaZero",
+        "gsp_muzero": "GSPMuZero",
+        "gsp_stochastic_muzero": "GSPStochasticMuZero",
+        "alphazero": "AlphaZero",
+        "muzero": "MuZero"
     }
     class_name = mapping.get(solver_name.lower())
     if class_name:
@@ -85,7 +94,11 @@ def filter_compatible(solver_name: str, kwargs: Dict[str, Any]) -> Dict[str, Any
     
     sig = inspect.signature(solver_cls.__init__)
     named_params = {p for p in sig.parameters if p not in ('self', 'env', 'kwargs', 'args')}
-    universal_args = {'c', 'horizon', 'gamma', 'rollout_limit', 'simulation_limit'}
+    universal_args = {
+        'c', 'horizon', 'gamma', 'rollout_limit', 'simulation_limit', 
+        'internal_reward_scale', 'internal_reward_offset', 'init_q', 
+        'v_min', 'v_max'
+    }
     
     return {k: v for k, v in kwargs.items() if k in named_params or k in universal_args}
 
@@ -102,16 +115,25 @@ def run_episode(env_name, solver_name, sims, seed=None, episode_idx=0, solver_kw
     obs = env.reset(seed=reset_seed)
     terminated, truncated = False, False
     total_reward, steps, search_times = 0, 0, []
+    info = {}
     
     while not (terminated or truncated) and steps < 200:
         start_search = time.time()
         action, _ = solver.search(obs)
         search_times.append(time.time() - start_search)
-        obs, reward, terminated, truncated, _ = env.step(action)
+        obs, reward, terminated, truncated, info = env.step(action)
         total_reward += reward
         steps += 1
         
-    return total_reward, steps, terminated, np.mean(search_times) if search_times else 0.0
+    success = False
+    if terminated and reward > 0:
+        success = True
+    elif truncated and env_name.lower().startswith("cartpole"):
+        success = True
+    elif terminated and "sailing" in env_name.lower():
+        success = True
+        
+    return total_reward, steps, success, np.mean(search_times) if search_times else 0.0
 
 def run_visualization(env_name, solver_name, sims, output_dir, target_seed, target_episode_idx, show_tree=False, solver_kwargs=None, **env_kwargs):
     from mcts_forest.utils.visualizer import print_tree
@@ -150,24 +172,40 @@ def run_visualization(env_name, solver_name, sims, output_dir, target_seed, targ
     env.close()
 
 def worker_fn(task):
-    np.random.seed(task["seed"] * 1000 + task["episode_idx"])
-    random.seed(task["seed"] * 1000 + task["episode_idx"])
-    
-    reward, steps, success, avg_search_time = run_episode(
-        task["env_name"], task["solver_name"], task["sims"],
-        seed=task["seed"],
-        episode_idx=task["episode_idx"],
-        solver_kwargs=task["solver_kwargs"],
-        **task["env_kwargs"]
-    )
-    return {
-        "seed": task["seed"],
-        "episode": task["episode_idx"] % task["ep_per_seed"],
-        "total_reward": reward,
-        "steps": steps,
-        "success": int(success),
-        "avg_search_time": avg_search_time
-    }
+    try:
+        np.random.seed(task["seed"] * 1000 + task["episode_idx"])
+        random.seed(task["seed"] * 1000 + task["episode_idx"])
+        
+        reward, steps, success, avg_search_time = run_episode(
+            task["env_name"], task["solver_name"], task["sims"],
+            seed=task["seed"],
+            episode_idx=task["episode_idx"],
+            solver_kwargs=task["solver_kwargs"],
+            **task["env_kwargs"]
+        )
+        
+        return {
+            "seed": task["seed"],
+            "episode": task["episode_idx"] % task["ep_per_seed"],
+            "total_reward": reward,
+            "steps": steps,
+            "success": int(success),
+            "avg_search_time": avg_search_time
+        }
+    except Exception as e:
+        import traceback
+        print(f"CRITICAL ERROR in worker_fn: {e}")
+        traceback.print_exc()
+        # Return a failure record so the main process can continue
+        return {
+            "seed": task["seed"],
+            "episode": task["episode_idx"] % task.get("ep_per_seed", 1),
+            "total_reward": 0.0,
+            "steps": 0,
+            "success": 0,
+            "avg_search_time": 0.0,
+            "error": str(e)
+        }
 
 def main():
     if sys.platform == "win32":
@@ -187,13 +225,14 @@ def main():
     parser.add_argument("--log", action="store_true", help="Log output files to the result directory")
     parser.add_argument("--solver_args", type=str, default="{}", help="Solver hyperparameters as dict string")
     parser.add_argument("--env_args", type=str, default="{}", help="Environment arguments as dict string")
+    parser.add_argument("--table", action="store_true", help="Generate result_table.txt in markdown format")
     
     args = parser.parse_args()
     
     # 1. Parse Grid Parameters
     envs = parse_grid_item(args.env)
     solvers = parse_grid_item(args.solver)
-    sims_list = [int(s) for s in parse_grid_item(args.sims)]
+    sims_list = sorted([int(s) for s in parse_grid_item(args.sims)])
     base_solver_args = parse_dict(args.solver_args)
     base_env_args = parse_dict(args.env_args)
     
@@ -245,6 +284,23 @@ def main():
 
     # Results tracking for final table
     final_results_summary = []
+    
+    if any("sailing" in e.lower() for e in envs):
+        # Calculate a quick baseline for Sailing (Always Down-Right)
+        console.print("\n[bold blue]Sailing Baseline (Always DOWN_RIGHT):[/bold blue]")
+        for env_name in envs:
+            if "sailing" in env_name.lower():
+                try:
+                    temp_env = REGISTRY.get_env(env_name)
+                    baseline_rewards = []
+                    for seed in range(args.seeds):
+                        for ep in range(args.episodes):
+                            reset_seed = seed * 1000 + ep
+                            baseline_rewards.append(temp_env.env.get_baseline_reward(reset_seed))
+                    console.print(f"  • [cyan]{env_name}[/cyan]: Baseline Mean Reward = [bold]{np.mean(baseline_rewards):.2f}[/bold]")
+                except:
+                    pass
+        console.print("")
 
     with Progress(
         SpinnerColumn(),
@@ -323,8 +379,13 @@ def main():
                 df.to_csv(os.path.join(output_path, "results.csv"), index=False)
                 
             # Formatting for summary table
+            display_name = solver_name
+            if 'p' in s_kwargs:
+                display_name += f" (p={s_kwargs['p']})"
+            
             final_results_summary.append({
                 "Solver": solver_name,
+                "DisplaySolver": display_name,
                 "Env": env_name,
                 "Sims": sims,
                 "Kwargs": str(s_kwargs) if s_kwargs else "-",
@@ -356,7 +417,7 @@ def main():
     for res in final_results_summary:
         color = "green" if "100.00%" in res["Success"] else "yellow" if "0.00%" not in res["Success"] else "red"
         table.add_row(
-            res["Solver"],
+            res["DisplaySolver"],
             res["Env"],
             str(res["Sims"]),
             res["Kwargs"],
@@ -367,6 +428,41 @@ def main():
         )
 
     console.print(table)
+    
+    # Generate Markdown Table if requested
+    if args.table:
+        # Pivot results: rows = DisplaySolver, columns = Sims
+        # We assume one Env for simplicity in the text table as per user example
+        unique_display_solvers = []
+        for res in final_results_summary:
+            if res["DisplaySolver"] not in unique_display_solvers:
+                unique_display_solvers.append(res["DisplaySolver"])
+        
+        sims_list = sorted(list(set(res["Sims"] for res in final_results_summary)))
+        
+        md_lines = []
+        # Header
+        header = "| | " + " | ".join(str(s) for s in sims_list) + " |"
+        separator = "| --- | " + " | ".join("---" for _ in sims_list) + " |"
+        md_lines.append(header)
+        md_lines.append(separator)
+        
+        for ds in unique_display_solvers:
+            row_parts = [ds]
+            for s in sims_list:
+                # Find matching result
+                match = next((res for res in final_results_summary if res["DisplaySolver"] == ds and res["Sims"] == s), None)
+                if match:
+                    cell = f"{match['Success']}<br>**{match['Reward']}**"
+                    row_parts.append(cell)
+                else:
+                    row_parts.append("")
+            md_lines.append("| " + " | ".join(row_parts) + " |")
+        
+        with open("result_table.txt", "w") as f:
+            f.write("\n".join(md_lines))
+        console.print(f"[bold green]Markdown table saved to result_table.txt[/bold green]")
+
     elapsed = progress.tasks[0].elapsed if 'progress' in locals() else 0
     console.print(f"[dim]All experiments completed in {elapsed:.2f} seconds.[/dim]\n")
 

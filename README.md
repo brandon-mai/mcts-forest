@@ -28,7 +28,7 @@ uv run train --algo gsp_alphazero --iterations 1 --games_per_it 1 --sims 10 --wa
     - **Cross**: Trained on Tree-search data, evaluated with GSP.
     ```python
     # Use python -m to avoid 'uv run' creating a large venv in the output folder
-    !python -m mcts_forest.scripts.train_loop --algo gsp_alphazero --env taxi --use_amp --wandb --wandb_key "YOUR_KEY_HERE"
+    !python -m mcts_forest.scripts.train_loop --algo gsp_alphazero --env taxi --use_amp --wandb --wandb_key "YOUR_KEY_HERE" --iterations 5 --games_per_it 50 --sims 400
     ```
 
 ## Development Strategy
@@ -52,24 +52,42 @@ uv sync
 
 Run the benchmarking script to evaluate a solver on an environment. The script supports **Grid Search** for comparing multiple configurations in a single run.
 
+### Example Commands
+
+#### 1. Frozen Lake (Slippery)
 ```bash
-# Basic run (no files saved)
-uv run benchmark --env frozenlake --solver uct --seeds 5 --sims 100
+# Debugging
+uv run benchmark --env frozenlake_slip --solver uct --sims 10 --seeds 1
 
-# Grid Search over solvers and simulations (no files saved)
-uv run benchmark --env frozenlake_slip --solver "('uct', 'sp_uct')" --sims "(1024, 2048)" --seeds 100
+# Single Solver Analysis
+uv run benchmark --env frozenlake_slip --solver gbop --sims "(1024, 2048, 4096, 8192, 16384)" --seeds 1000 --parallel
 
-# Grid Search with hyperparameter combinations (log results to disk)
-uv run benchmark --env frozenlake_slip --solver sp_uct --solver_args "{'p': (1.0, 2.0)}" --log
+# Comprehensive Benchmark
+uv run benchmark --env frozenlake_slip --solver "('stochastic_uct', 'sp_uct', 'gbopd', 'gbop', 'gsp_uct')" --sims "(1024, 2048, 4096, 8192, 16384)" --seeds 1000 --solver_args "{'p': (1.0, 2.0)}" --parallel --table
+```
 
-# Real command I used
-uv run benchmark --env frozenlake8x8_slip --solver "('mcgs', 'gsp_uct')" --seeds 1000 --parallel --sims "(1024, 2048, 4096, 8192, 16384)" --solver_args "{'p': (1.0, 2.0)}"
+#### 2. Taxi (Rainy)
+```bash
+# Debugging
+uv run benchmark --env taxi_rain --solver uct --sims 50 --seeds 1 --solver_args "{'internal_reward_scale': 0.0333, 'c': 2.0}"
 
-# Grid Search over Power Mean parameters
-uv run benchmark --env frozenlake_slip --solver "('sp_uct', 'gsp_uct')" --seeds 500 --parallel --sims "(1024, 2048, 4096)" --solver_args "{'p': (1.0, 2.0), 'c': (0.25, 0.5, 0.75, 1.0, 1.25, 1.5)}"
+# Single Solver Analysis
+uv run benchmark --env taxi_rain --solver uct --sims "(512, 1024, 2048, 4096, 8192)" --seeds 50 --solver_args "{'internal_reward_scale': 0.0333, 'c': 2.0, 'init_q': -100, 'v_min': -6.6, 'v_max': 0.66}" --parallel
 
-# Taxi
-uv run benchmark --env taxi_rain --solver uct --seeds 50 --parallel --sims "(512, 1024, 2048, 4096, 8192, 16384)" --solver_args "{'c': (60.0)}"
+# Comprehensive Benchmark
+uv run benchmark --env taxi_rain --solver "('stochastic_uct', 'sp_uct', 'ments', 'gbopd', 'gbop', 'gsp_uct')" --sims "(512, 1024, 2048, 4096, 8192)" --seeds 50 --solver_args "{'p': (1.0, 2.0), 'internal_reward_scale': 0.0333, 'c': 2.0, 'init_q': -100, 'v_min': -6.6, 'v_max': 0.66}" --parallel --table
+```
+
+#### 3. Sailing (Windy)
+```bash
+# Debugging
+uv run benchmark --env sailing8x8_0.8 --solver uct --sims 100 --seeds 1 --solver_args "{'internal_reward_scale': 0.5}" --parallel
+
+# Single Solver Analysis
+uv run benchmark --env sailing8x8_0.8 --solver uct --sims "(512, 1024, 2048, 4096, 8192)" --seeds 50 --solver_args "{'internal_reward_scale': 0.5}" --parallel
+
+# Comprehensive Benchmark
+uv run benchmark --env sailing8x8_0.8 --solver "('stochastic_uct', 'sp_uct', 'ments', 'gbopd', 'gbop', 'gsp_uct')" --sims "(128, 256, 512, 1024, 2048)" --seeds 100 --solver_args "{'p': (1.0, 2.0), 'internal_reward_scale': 0.5}" --parallel --table
 ```
 
 ### Arguments
@@ -79,10 +97,11 @@ uv run benchmark --env taxi_rain --solver uct --seeds 50 --parallel --sims "(512
 - `--sims`: MCTS simulations per move. Supports Grid Search `"(100, 200)"`.
 - `--solver_args`: Dictionary string for solver hypers. Values can be grids `"{'p': (1.0, 2.0)}"`.
 - `--log`: Boolean flag. If present, saves CSVs, videos, and logs to `results/`.
-- `--episodes`: Episodes per seed (default: 10).
+- `--episodes`: Episodes per seed (default: 1).
 - `--seeds`: Number of random seeds for statistical significance (default: 5).
 - `--parallel`: Enable parallel episode execution.
 - `--show_tree`: Print the colorful MCTS tree to terminal during replay.
+- `--table`: Generate `result_table.txt` with a Markdown summary table.
 
 ## Visualization & Analysis
 

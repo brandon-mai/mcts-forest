@@ -110,7 +110,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--algo", type=str, default="gsp_alphazero")
-    parser.add_argument("--env", type=str, default="frozenlake_slip")
+    parser.add_argument("--env", type=str, default="frozenlake")
     parser.add_argument("--iterations", type=int, default=1)
     parser.add_argument("--games_per_it", type=int, default=1)
     parser.add_argument("--sims", type=int, default=100)
