@@ -218,6 +218,7 @@ __marimo__/
 # shits
 gymcts_original/
 mcgs_copy/
+JAIR_cpp_v5/
 results/
 checkpoints/
 wandb/

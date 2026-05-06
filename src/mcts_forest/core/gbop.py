@@ -288,16 +288,45 @@ def gbop_core(initial_state, transitions, rewards, dones, probs_cum,
 
 class GBOP:
     def __init__(self, env, gamma=0.99, horizon=100, trajectories=100, v_min=0.0, v_max=1.0, tol=1e-3, use_newton=True, **kwargs):
-        self.env, self.gamma, self.horizon = env, gamma, horizon
-        self.trajectories = kwargs.get("simulation_limit", trajectories)
+        self.env, self.gamma = env, gamma
         self.v_min, self.v_max, self.tol = v_min, v_max, tol
         self.use_newton = use_newton
         self.reward_scale = np.float32(kwargs.get("internal_reward_scale", 1.0))
         self.reward_offset = np.float32(kwargs.get("internal_reward_offset", 0.0))
         self.dynamics = env.get_numba_dynamics()
-        self.max_n = 5000
+        
+        # Budget Allocation: Budget = Horizon * Trajectories
+        strategy = kwargs.get("budget_strategy", "auto")
+        budget = kwargs.get("simulation_limit", horizon * trajectories)
+        
+        if strategy == "manual":
+            self.horizon = kwargs.get("horizon", horizon)
+            self.trajectories = max(1, budget // self.horizon)
+        elif strategy == "generous":
+            self.trajectories = budget
+            self.horizon = kwargs.get("horizon", horizon)
+        elif "simulation_limit" in kwargs:
+            # Auto allocation scheme: L = log(M) / (2 * log(1/gamma))
+            log_inv_gamma = math.log(1.0 / gamma) if gamma < 1.0 else math.log(1.0 / 0.99)
+            best_m, best_l = 1, budget
+            low, high = 1, budget
+            while low <= high:
+                mid = (low + high) // 2
+                l_mid = budget if mid <= 1 else max(1, int(math.ceil(math.log(mid) / (2 * log_inv_gamma))))
+                if mid * l_mid <= budget:
+                    best_m, best_l = mid, l_mid
+                    low = mid + 1
+                else:
+                    high = mid - 1
+            self.trajectories, self.horizon = best_m, best_l
+        else:
+            self.horizon, self.trajectories = horizon, trajectories
+        
+        total_transitions = self.trajectories * self.horizon
+        self.max_n = max(10000, total_transitions + 1000) 
         self.max_k = 64
         self.max_parents = 64
+        self.strategy = strategy
 
     def search(self, initial_state: int) -> Tuple[int, Dict[str, Any]]:
         n_actions = self.dynamics[0].shape[1]
@@ -362,3 +391,6 @@ class GBOP:
 
     def get_name(self) -> str:
         return f"gbop_traj{self.trajectories}"
+
+    def print_info(self):
+        print(f"[GBOP] strategy={self.strategy}, trajectories={self.trajectories}, horizon={self.horizon}")

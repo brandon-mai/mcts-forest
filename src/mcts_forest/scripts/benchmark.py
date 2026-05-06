@@ -97,7 +97,7 @@ def filter_compatible(solver_name: str, kwargs: Dict[str, Any]) -> Dict[str, Any
     universal_args = {
         'c', 'horizon', 'gamma', 'rollout_limit', 'simulation_limit', 
         'internal_reward_scale', 'internal_reward_offset', 'init_q', 
-        'v_min', 'v_max'
+        'v_min', 'v_max', 'budget_strategy'
     }
     
     return {k: v for k, v in kwargs.items() if k in named_params or k in universal_args}
@@ -329,11 +329,17 @@ def main():
             
             progress.update(overall_task, description=f"[bold cyan]Grid: {current_label} ({i+1}/{len(all_experiments)})")
             
+            # Setup solver info (print once per experiment)
+            with progress.console.status(f"[bold blue]Initializing {solver_name} for {env_name}...[/bold blue]"):
+                temp_env = REGISTRY.get_env(env_name, **e_kwargs)
+                temp_solver = REGISTRY.get_solver(solver_name, temp_env, simulation_limit=sims, **s_kwargs)
+            
+            if hasattr(temp_solver, "print_info"):
+                temp_solver.print_info()
+
             # Setup output path
             output_path = None
             if args.log:
-                temp_env = REGISTRY.get_env(env_name, **e_kwargs)
-                temp_solver = REGISTRY.get_solver(solver_name, temp_env, simulation_limit=sims, **s_kwargs)
                 experiment_name = generate_experiment_name(temp_env, temp_solver, seeds=args.seeds)
                 output_path = os.path.join(args.output, experiment_name)
                 clear_directory(output_path)
@@ -398,7 +404,10 @@ def main():
             if args.log and output_path:
                 successes = df[df['success'] == 1]
                 best_row = successes.sort_values('steps').iloc[0] if not successes.empty else df.sort_values('steps', ascending=False).iloc[0]
-                run_visualization(env_name, solver_name, sims, output_path, int(best_row['seed']), int(best_row['episode']), show_tree=args.show_tree, solver_kwargs=s_kwargs, **e_kwargs)
+                try:
+                    run_visualization(env_name, solver_name, sims, output_path, int(best_row['seed']), int(best_row['episode']), show_tree=args.show_tree, solver_kwargs=s_kwargs, **e_kwargs)
+                except Exception as e:
+                    console.print(f"  [yellow]⚠ Skipping video recording for {env_name}: {e}[/yellow]")
 
             progress.advance(overall_task)
 
@@ -459,7 +468,7 @@ def main():
                     row_parts.append("")
             md_lines.append("| " + " | ".join(row_parts) + " |")
         
-        with open("result_table.txt", "w") as f:
+        with open("result_table.txt", "w", encoding="utf-8") as f:
             f.write("\n".join(md_lines))
         console.print(f"[bold green]Markdown table saved to result_table.txt[/bold green]")
 

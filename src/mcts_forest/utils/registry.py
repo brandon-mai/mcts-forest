@@ -22,6 +22,7 @@ from mcts_forest.core.alphazero import AlphaZero, AlphaZeroNet
 from mcts_forest.core.muzero import MuZero, MuZeroNet
 from mcts_forest.core.base import TorchModelAdapter
 from mcts_forest.core.random_agent import RandomAgent
+from mcts_forest.envs.jair_envs import FactoredRiverSwimEnv, FourRoomsEnv, PassengerGridEnv, SysadminRingEnv
 
 class Registry:
     def __init__(self):
@@ -61,6 +62,23 @@ class Registry:
             kwargs["grid_size"] = int(sailing_match.group(1))
             return self.envs["sailing"](**kwargs)
             
+        # 3. Handle JAIR environments
+        river_match = re.match(r'riverswim_n(\d+)x(\d+)', name_lower)
+        if river_match:
+            kwargs["num_rivers"] = int(river_match.group(1))
+            kwargs["num_locations"] = int(river_match.group(2))
+            return self.envs["riverswim"](**kwargs)
+            
+        fourrooms_match = re.match(r'fourrooms_n(\d+)', name_lower)
+        if fourrooms_match:
+            kwargs["n"] = int(fourrooms_match.group(1))
+            return self.envs["fourrooms"](**kwargs)
+            
+        sysadmin_match = re.match(r'sysadmin_n(\d+)', name_lower)
+        if sysadmin_match:
+            kwargs["num_computers"] = int(sysadmin_match.group(1))
+            return self.envs["sysadmin"](**kwargs)
+            
         return self.envs[name_lower](**kwargs)
     def get_solver(self, name, env, **kwargs): return self.solvers[name.lower()](env, **kwargs)
 
@@ -79,6 +97,10 @@ REGISTRY.register_env("taxi", lambda **kwargs: GymAdapter("Taxi-v4", **kwargs))
 REGISTRY.register_env("taxi_rain", lambda **kwargs: GymAdapter("Taxi-v4", is_rainy=True, **kwargs))
 REGISTRY.register_env("cartpole", lambda **kwargs: GymAdapter("CartPole-v1", **kwargs))
 REGISTRY.register_env("sailing", lambda **kwargs: GymAdapter("Sailing-v0", **kwargs))
+REGISTRY.register_env("riverswim", lambda **kwargs: GymAdapter("FactoredRiverSwim-v0", **kwargs))
+REGISTRY.register_env("fourrooms", lambda **kwargs: GymAdapter("FourRooms-v0", **kwargs))
+REGISTRY.register_env("passenger_grid", lambda **kwargs: GymAdapter("PassengerGrid-v0", **kwargs))
+REGISTRY.register_env("sysadmin", lambda **kwargs: GymAdapter("SysadminRing-v0", **kwargs))
 
 # 2. Register Solvers
 REGISTRY.register_solver("uct", lambda env, **kwargs: UCT(env, **kwargs))

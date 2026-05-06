@@ -90,6 +90,25 @@ uv run benchmark --env sailing8x8_0.8 --solver uct --sims "(512, 1024, 2048, 409
 uv run benchmark --env sailing8x8_0.8 --solver "('stochastic_uct', 'sp_uct', 'ments', 'gbopd', 'gbop', 'gsp_uct')" --sims "(128, 256, 512, 1024, 2048)" --seeds 100 --solver_args "{'p': (1.0, 2.0), 'internal_reward_scale': 0.5}" --parallel --table
 ```
 
+#### 4. JAIR Benchmarks (Factored River Swim, Four Rooms, Passenger Grid, Sysadmin)
+```bash
+# Passenger Grid (Sims: 256 to 8192)
+uv run benchmark --env passenger_grid --solver gbop --sims "(1024)" --seeds 500 --parallel --solver_args "{'budget_strategy': 'generous', 'horizon': 70}"
+
+uv run benchmark --env passenger_grid --solver gbop --sims "(256, 512, 1024, 2048, 4096, 8192)" --seeds 500 --parallel --solver_args "{'budget_strategy': 'generous', 'horizon': 70}" --table
+
+# Factored River Swim (Sims: 64 to 2048)
+uv run benchmark --env riverswim_n4x8 --solver gbop --sims "(1024)" --seeds 500 --parallel --solver_args "{'budget_strategy': 'generous', 'horizon': 35}"
+
+uv run benchmark --env riverswim_n4x8 --solver gbop --sims "(64, 128, 256, 512, 1024, 2048)" --seeds 500 --parallel --solver_args "{'budget_strategy': 'generous', 'horizon': 35}" --table
+
+# Sysadmin Ring (Sims: 512 to 16384)
+uv run benchmark --env sysadmin_n10 --solver gbop --sims "(512, 1024, 2048, 4096, 8192, 16384)" --seeds 500 --parallel --solver_args "{'budget_strategy': 'generous', 'horizon': 50}" --table
+
+# Four Rooms (Sims: 64 to 4096)
+uv run benchmark --env fourrooms_n5 --solver gbop --sims "(64, 128, 256, 512, 1024, 2048, 4096)" --seeds 500 --parallel --solver_args "{'budget_strategy': 'generous', 'horizon': 50}" --table
+```
+
 ### Arguments
 
 - `--env`: Environment ID (e.g., `frozenlake`, `taxi`). Supports Grid Search `"(env1, env2)"`.

@@ -2,6 +2,8 @@ import gymnasium as gym
 import numpy as np
 import copy
 import pickle
+import hashlib
+import os
 from typing import Any, Tuple, Dict, List, Protocol, TypeVar, Optional
 from mcts_forest.envs.base import EnvBase
 
@@ -150,6 +152,16 @@ class GymAdapter(EnvBase):
         if not hasattr(self.env, 'P'):
             return None
             
+        # Check disk cache
+        cache_path = None
+        if hasattr(self.env, "get_fingerprint"):
+            fp = str(self.env.get_fingerprint())
+            h = hashlib.md5(fp.encode()).hexdigest()
+            cache_path = os.path.join(".cache", f"dynamics_{h}.npz")
+            if os.path.exists(cache_path):
+                data = np.load(cache_path)
+                return data['transitions'], data['rewards'], data['dones'], data['probs_cum']
+
         ns = self.env.observation_space.n
         na = self.env.action_space.n
         
@@ -172,6 +184,16 @@ class GymAdapter(EnvBase):
             for a in range(na):
                 outcomes = self.env.P[s][a]
                 cum_p = 0.0
+                
+                # Handle states with no defined transitions (e.g., terminal states in some JAIR envs)
+                if not outcomes:
+                    for i in range(max_outcomes):
+                        transitions[s, a, i] = s
+                        rewards[s, a, i] = 0.0
+                        dones[s, a, i] = True
+                        probs_cum[s, a, i] = 1.0
+                    continue
+
                 for i in range(max_outcomes):
                     target_idx = i if i < len(outcomes) else (len(outcomes) - 1)
                     prob, next_s, r, done = outcomes[target_idx]
@@ -186,5 +208,8 @@ class GymAdapter(EnvBase):
                     rewards[s, a, i] = (r + self.reward_offset) * self.reward_scale
                     dones[s, a, i] = done
         
-        return transitions, rewards, dones, probs_cum
+        if cache_path:
+            os.makedirs(".cache", exist_ok=True)
+            np.savez_compressed(cache_path, transitions=transitions, rewards=rewards, dones=dones, probs_cum=probs_cum)
 
+        return transitions, rewards, dones, probs_cum
