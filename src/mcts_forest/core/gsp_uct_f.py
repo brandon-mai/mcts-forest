@@ -5,7 +5,7 @@ from numba import njit
 from numba.typed import Dict as NumbaDict
 from typing import Tuple, Dict, Any
 
-@njit(cache=True)
+@njit
 def gsp_uct_full_core(n_sim, horizon, initial_state, c, gamma, p, rollout_limit, step_fn, rollout_fn, params, n_actions, T_s, Q_hat, V_hat, T_sa, state_to_node, node_states, node_counter, reward_offset, reward_scale):
     p_nodes = np.empty(horizon + 1, dtype=np.int32)
     p_a = np.empty(horizon + 1, dtype=np.int32)

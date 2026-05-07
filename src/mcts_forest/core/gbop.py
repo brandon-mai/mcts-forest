@@ -7,13 +7,20 @@ import math
 
 @njit
 def max_expectation_under_constraint(f, q, c, eps=1e-3, use_newton=True):
-    if c <= 0 or len(q) <= 1:
+    if c < 1e-10:
         sum_qf = 0.0
-        for i in range(len(q)):
-            sum_qf += q[i] * f[i]
+        for i in range(len(q)): sum_qf += q[i] * f[i]
         return sum_qf
-    f_star = np.amax(f)
-    if np.isclose(f, f[0]).all(): return f[0]
+    f_star = -1e18
+    for i in range(len(f)):
+        if f[i] > f_star: f_star = f[i]
+    
+    all_same = True
+    for i in range(len(f)):
+        if abs(f[i] - f_star) > 1e-9:
+            all_same = False
+            break
+    if all_same: return f_star
     a = f_star + 1e-7
     b = f_star + 100.0
     for _ in range(10):
@@ -90,6 +97,7 @@ def gbop_core(initial_state, step_fn, params, n_actions,
         curr_s = initial_state
         curr_node = np.int32(0)
         p_len = 0
+        ln_total = math.log(float(max(1, n_total)))
         for t in range(horizon):
             n_total += 1
             traj_nodes[p_len] = curr_node
@@ -100,15 +108,16 @@ def gbop_core(initial_state, step_fn, params, n_actions,
                 n_sa = n_obs[curr_node, a]
                 if n_sa == 0: qu = v_max
                 else:
-                    r_mean, p_done, k_max = r_sum[curr_node, a] / n_sa, d_count[curr_node, a] / n_sa, n_successors[curr_node, a]
-                    epsilon = math.log(n_total) / n_sa
+                    inv_n_sa = 1.0 / n_sa
+                    r_mean, p_done, k_max = r_sum[curr_node, a] * inv_n_sa, d_count[curr_node, a] * inv_n_sa, n_successors[curr_node, a]
+                    epsilon = ln_total * inv_n_sa
                     if k_max == 0: qu = r_mean + gamma * (1.0 - p_done) * v_max
                     elif k_max == 1: qu = r_mean + gamma * (1.0 - p_done) * v_upper[successor_nodes[curr_node, a, 0]]
                     else:
                         p_hat, v_next_u = p_buf[:k_max], v_u_buf[:k_max]
                         for k in range(k_max):
                             nid = successor_nodes[curr_node, a, k]
-                            p_hat[k], v_next_u[k] = successor_counts[curr_node, a, k] / n_sa, v_upper[nid]
+                            p_hat[k], v_next_u[k] = successor_counts[curr_node, a, k] * inv_n_sa, v_upper[nid]
                         qu = r_mean + gamma * (1.0 - p_done) * max_expectation_under_constraint(v_next_u, p_hat, epsilon, use_newton=use_newton)
                 if qu > max_q: max_q, best_a = qu, a
             
@@ -156,8 +165,9 @@ def gbop_core(initial_state, step_fn, params, n_actions,
         for i in range(p_len - 1, -1, -1):
             s_traj = traj_nodes[i]
             if not in_queue[s_traj]: queue[tail] = s_traj; tail += 1; in_queue[s_traj] = True
+        ln_total = math.log(float(max(1, n_total)))
         sweeps = 0
-        while head < tail and sweeps < 1000:
+        while head < tail and sweeps < 200:
             s_prime = queue[head]; head += 1; in_queue[s_prime] = False; sweeps += 1
             old_l, old_u = v_lower[s_prime], v_upper[s_prime]
             best_l, best_u = -1e18, -1e18
@@ -166,7 +176,7 @@ def gbop_core(initial_state, step_fn, params, n_actions,
                 if n_sa == 0: ql, qu = v_min, v_max
                 else:
                     r_mean, p_done, k_max = r_sum[s_prime, a] / n_sa, d_count[s_prime, a] / n_sa, n_successors[s_prime, a]
-                    epsilon = math.log(n_total) / n_sa
+                    epsilon = ln_total / n_sa
                     if k_max == 0: ql, qu = r_mean + gamma*(1.0-p_done)*v_min, r_mean + gamma*(1.0-p_done)*v_max
                     elif k_max == 1:
                         nid = successor_nodes[s_prime, a, 0]
