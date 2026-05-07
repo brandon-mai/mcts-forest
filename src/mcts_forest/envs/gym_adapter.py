@@ -144,72 +144,35 @@ class GymAdapter(EnvBase):
     def observation_space(self) -> gym.Space:
         return self.env.observation_space
 
-    def get_numba_dynamics(self) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+    def get_procedural_dynamics(self):
         """
-        Extracts transition dynamics for Toy-Text environments as NumPy arrays.
-        Enables Numba-accelerated rollouts with precise probabilistic sampling.
+        Returns procedural dynamics functions and parameters.
+        Only supported for environments with procedural implementations.
         """
-        if not hasattr(self.env, 'P'):
-            return None
+        # 1. Check if the underlying env has it (JAIR envs)
+        if hasattr(self.env, "get_procedural_dynamics"):
+            return self.env.get_procedural_dynamics()
             
-        # Check disk cache
-        cache_path = None
-        if hasattr(self.env, "get_fingerprint"):
-            fp = str(self.env.get_fingerprint())
-            h = hashlib.md5(fp.encode()).hexdigest()
-            cache_path = os.path.join(".cache", f"dynamics_{h}.npz")
-            if os.path.exists(cache_path):
-                data = np.load(cache_path)
-                return data['transitions'], data['rewards'], data['dones'], data['probs_cum']
-
-        ns = self.env.observation_space.n
-        na = self.env.action_space.n
+        # 2. Hardcoded support for standard Toy-Text envs
+        env_name = self.get_name()
         
-        # Determine max outcomes to create fixed-shape arrays
-        max_outcomes = 0
-        for s in range(ns):
-            for a in range(na):
-                max_outcomes = max(max_outcomes, len(self.env.P[s][a]))
-        
-        if max_outcomes == 0:
-            return None
-
-        # [states, actions, outcomes]
-        transitions = np.zeros((ns, na, max_outcomes), dtype=np.int32)
-        rewards = np.zeros((ns, na, max_outcomes), dtype=np.float32)
-        dones = np.zeros((ns, na, max_outcomes), dtype=np.bool_)
-        probs_cum = np.zeros((ns, na, max_outcomes), dtype=np.float32)
-        
-        for s in range(ns):
-            for a in range(na):
-                outcomes = self.env.P[s][a]
-                cum_p = 0.0
-                
-                # Handle states with no defined transitions (e.g., terminal states in some JAIR envs)
-                if not outcomes:
-                    for i in range(max_outcomes):
-                        transitions[s, a, i] = s
-                        rewards[s, a, i] = 0.0
-                        dones[s, a, i] = True
-                        probs_cum[s, a, i] = 1.0
-                    continue
-
-                for i in range(max_outcomes):
-                    target_idx = i if i < len(outcomes) else (len(outcomes) - 1)
-                    prob, next_s, r, done = outcomes[target_idx]
-                    
-                    if i < len(outcomes):
-                        cum_p += prob
-                        probs_cum[s, a, i] = cum_p
-                    else:
-                        probs_cum[s, a, i] = 1.0 # Padding
-                        
-                    transitions[s, a, i] = next_s
-                    rewards[s, a, i] = (r + self.reward_offset) * self.reward_scale
-                    dones[s, a, i] = done
-        
-        if cache_path:
-            os.makedirs(".cache", exist_ok=True)
-            np.savez_compressed(cache_path, transitions=transitions, rewards=rewards, dones=dones, probs_cum=probs_cum)
-
-        return transitions, rewards, dones, probs_cum
+        if "frozenlake" in env_name:
+            from mcts_forest.envs.procedural import frozen_lake_step, frozen_lake_rollout
+            desc = self.env.unwrapped.desc
+            # Convert desc to integer grid: F=0, H=1, G=2, S=3
+            h, w = desc.shape
+            grid = np.zeros(h * w, dtype=np.int32)
+            mapping = {b'F': 0, b'H': 1, b'G': 2, b'S': 3}
+            for i in range(h):
+                for j in range(w):
+                    grid[i * w + j] = mapping[desc[i, j]]
+            params = (grid, w, h, self.is_slippery)
+            return frozen_lake_step, frozen_lake_rollout, params
+            
+        if "taxi" in env_name:
+            from mcts_forest.envs.procedural import taxi_step, taxi_rollout
+            prob = getattr(self.env, "rainy_probability", 0.0) if self.is_rainy else 0.0
+            params = (float(prob),)
+            return taxi_step, taxi_rollout, params
+            
+        raise NotImplementedError(f"Procedural dynamics not implemented for environment: {env_name}")

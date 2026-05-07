@@ -132,8 +132,22 @@ def main():
     obs_dim = temp_env.observation_space.n if hasattr(temp_env.observation_space, 'n') else temp_env.observation_space.shape[0]
     n_actions = temp_env.action_space.n
     num_outcomes = 1
-    dynamics = temp_env.get_numba_dynamics()
-    if dynamics is not None: num_outcomes = dynamics[0].shape[2]
+    env_name = args.env.lower()
+    if "frozenlake" in env_name:
+        num_outcomes = 3 # Max outcomes for slippery
+    elif "taxi" in env_name:
+        num_outcomes = 2 # Max outcomes for rainy
+    elif "riverswim" in env_name:
+        num_outcomes = 3
+    elif "sysadmin" in env_name:
+        num_outcomes = 2 # It's factored, but let's assume 2 for local dynamics
+    else:
+        # Try to guess from procedural dynamics if possible, otherwise default to 2 for stochastic
+        try:
+            temp_env.get_procedural_dynamics()
+            num_outcomes = 2 
+        except:
+            num_outcomes = 1
 
     # Solver Mapping
     gsp_algo_name = args.algo if args.algo.startswith("gsp_") else f"gsp_{args.algo}"

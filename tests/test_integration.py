@@ -1,7 +1,6 @@
 import pytest
 import numpy as np
 from mcts_forest.core.uct import UCT
-from mcts_forest.core.base import random_rollout_discrete
 
 @pytest.mark.parametrize("seed", [42, 123, 2024])
 def test_frozen_lake_deterministic_convergence(deterministic_frozen_lake, seed):
@@ -24,10 +23,10 @@ def test_frozen_lake_deterministic_convergence(deterministic_frozen_lake, seed):
 
 def test_rollout_reward_range(deterministic_frozen_lake):
     """Verifies that random rollout reward falls within expected [0, 1] range for Frozen Lake."""
-    dynamics = deterministic_frozen_lake.get_numba_dynamics()
+    _, rollout_fn, params = deterministic_frozen_lake.get_procedural_dynamics()
     obs = deterministic_frozen_lake.reset()
     
-    reward = random_rollout_discrete(obs, *dynamics, limit=100, gamma=0.99, reward_offset=0.0, reward_scale=1.0)
+    reward = rollout_fn(obs, *params, 100, 0.99)
     assert 0.0 <= reward <= 1.0
 
 def test_uct_info_consistency(deterministic_frozen_lake):

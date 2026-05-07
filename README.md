@@ -103,7 +103,7 @@ uv run benchmark --env riverswim_n4x8 --solver gbop --sims "(1024)" --seeds 500 
 uv run benchmark --env riverswim_n4x8 --solver gbop --sims "(64, 128, 256, 512, 1024, 2048)" --seeds 500 --parallel --solver_args "{'budget_strategy': 'generous', 'horizon': 35}" --table
 
 # Sysadmin Ring (Sims: 512 to 16384)
-uv run benchmark --env sysadmin_n10 --solver gbop --sims "(512, 1024, 2048, 4096, 8192, 16384)" --seeds 500 --parallel --solver_args "{'budget_strategy': 'generous', 'horizon': 50}" --table
+uv run benchmark --env sysadmin_n20 --solver gbop --sims "(512, 1024, 2048, 4096, 8192, 16384)" --seeds 500 --parallel --solver_args "{'budget_strategy': 'generous', 'horizon': 50}" --table
 
 # Four Rooms (Sims: 64 to 4096)
 uv run benchmark --env fourrooms_n5 --solver gbop --sims "(64, 128, 256, 512, 1024, 2048, 4096)" --seeds 500 --parallel --solver_args "{'budget_strategy': 'generous', 'horizon': 50}" --table

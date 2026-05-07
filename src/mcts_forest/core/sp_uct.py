@@ -4,12 +4,9 @@ import numba
 from numba import njit
 from numba.typed import Dict as NumbaDict
 from typing import Tuple, Dict, Any
-from mcts_forest.core.base import sample_discrete_transition, random_rollout_discrete
-from mcts_forest.utils.visualizer import SurrogateNode
 
-@njit(cache=True)
-def sp_uct_core(n_sim, horizon, c, gamma, p, rollout_limit, dynamics, T_s, Q_hat, V_hat, T_sa, child_nodes, node_states, node_counter, reward_offset, reward_scale):
-    transitions, rewards, dones, probs_cum = dynamics
+@njit
+def sp_uct_core(n_sim, horizon, c, gamma, p, rollout_limit, step_fn, rollout_fn, params, n_actions, T_s, Q_hat, V_hat, T_sa, child_nodes, node_states, node_counter, reward_offset, reward_scale):
     for _ in range(n_sim):
         curr_node, curr_h = 0, 0
         p_nodes, p_a, p_r, p_next_s = np.empty(horizon + 1, dtype=np.int32), np.empty(horizon + 1, dtype=np.int32), np.empty(horizon + 1, dtype=np.float32), np.empty(horizon + 1, dtype=np.int32)
@@ -20,7 +17,7 @@ def sp_uct_core(n_sim, horizon, c, gamma, p, rollout_limit, dynamics, T_s, Q_hat
             s_idx = node_states[curr_node]
             best_val, best_a, n_p = -1e18, -1, T_s[curr_node]
             
-            for a in range(Q_hat.shape[1]):
+            for a in range(n_actions):
                 n_sa = T_sa[curr_node, a]
                 if n_sa == 0:
                     best_a = a
@@ -31,11 +28,10 @@ def sp_uct_core(n_sim, horizon, c, gamma, p, rollout_limit, dynamics, T_s, Q_hat
                     best_val, best_a = val, a
             
             a = best_a
-            next_s, r, done = sample_discrete_transition(s_idx, a, transitions, rewards, dones, probs_cum)
+            # Use procedural step
+            next_s, r, done = step_fn(s_idx, a, *params)
             
-            # Internal normalization
             r_int = (r + reward_offset) * reward_scale
-            
             key = (np.int32(curr_node), np.int32(a), np.int32(next_s))
             if key in child_nodes:
                 next_node = child_nodes[key]
@@ -49,20 +45,19 @@ def sp_uct_core(n_sim, horizon, c, gamma, p, rollout_limit, dynamics, T_s, Q_hat
                 v_leaf = 0.0
                 break
             if next_node == -1:
-                # Expand Node
                 new_id = node_counter[0]
                 node_counter[0] += 1
                 child_nodes[key], node_states[new_id] = new_id, next_s
-                v_leaf = random_rollout_discrete(next_s, transitions, rewards, dones, probs_cum, rollout_limit, gamma, reward_offset, reward_scale)
+                # Use procedural rollout
+                v_leaf = (rollout_fn(next_s, *params, rollout_limit, gamma) + reward_offset) * reward_scale
                 
                 V_hat[new_id] = v_leaf
                 T_s[new_id] = 1
                 break
             curr_node, curr_h = next_node, curr_h + 1
         else:
-            v_leaf = random_rollout_discrete(node_states[curr_node], transitions, rewards, dones, probs_cum, rollout_limit, gamma, reward_offset, reward_scale)
+            v_leaf = (rollout_fn(node_states[curr_node], *params, rollout_limit, gamma) + reward_offset) * reward_scale
 
-        # Backpropagation (SimulateV/Q recursive equivalent)
         v_back = v_leaf
         for i in range(p_len - 1, -1, -1):
             n_id, a, r_int = p_nodes[i], p_a[i], p_r[i]
@@ -73,20 +68,20 @@ def sp_uct_core(n_sim, horizon, c, gamma, p, rollout_limit, dynamics, T_s, Q_hat
             T_s[n_id] = n_p
             
             q_min = 1e18
-            for act in range(Q_hat.shape[1]):
+            for act in range(n_actions):
                 if T_sa[n_id, act] > 0 and Q_hat[n_id, act] < q_min:
                     q_min = Q_hat[n_id, act]
             
             curr_shift = max(0.0, -q_min) + reward_scale
             if math.isinf(p):
                 max_q = -1e18
-                for act in range(Q_hat.shape[1]):
+                for act in range(n_actions):
                     if T_sa[n_id, act] > 0 and Q_hat[n_id, act] > max_q:
                         max_q = Q_hat[n_id, act]
                 V_hat[n_id] = max_q
             else:
                 weighted_sum = 0.0
-                for act in range(Q_hat.shape[1]):
+                for act in range(n_actions):
                     n_act = T_sa[n_id, act]
                     if n_act > 0:
                         q_val = Q_hat[n_id, act] + curr_shift
@@ -107,15 +102,24 @@ class SPUCT:
         self.reward_offset = internal_reward_offset
         self.reward_scale = internal_reward_scale
         self.init_q = init_q
-        self.dynamics = env.get_numba_dynamics()
+        
+        # Enforce procedural dynamics
+        try:
+            self.step_fn, self.rollout_fn, self.params = env.get_procedural_dynamics()
+        except (AttributeError, NotImplementedError) as e:
+            raise RuntimeError(f"SPUCT requires procedural dynamics: {e}")
 
     def search(self, initial_state: int) -> Tuple[int, Dict[str, Any]]:
+        n_actions = self.env.action_space_size
         max_n = self.simulation_limit * 3 + 1
-        T_s, Q_hat, V_hat = np.zeros(max_n, dtype=np.int32), np.full((max_n, self.dynamics[0].shape[1]), self.init_q, dtype=np.float32), np.full(max_n, self.init_q, dtype=np.float32)
-        T_sa, n_states, n_counter = np.zeros((max_n, self.dynamics[0].shape[1]), dtype=np.int32), np.zeros(max_n, dtype=np.int32), np.array([1], dtype=np.int32)
-        n_states[0], child_nodes = initial_state, NumbaDict.empty(key_type=numba.types.Tuple((numba.int32, numba.int32, numba.int32)), value_type=numba.int32)
+        T_s, Q_hat, V_hat = np.zeros(max_n, dtype=np.int32), np.full((max_n, n_actions), self.init_q, dtype=np.float32), np.full(max_n, self.init_q, dtype=np.float32)
+        T_sa, n_states, n_counter = np.zeros((max_n, n_actions), dtype=np.int32), np.zeros(max_n, dtype=np.int32), np.array([1], dtype=np.int32)
+        n_states[0] = initial_state
+        child_nodes = NumbaDict.empty(key_type=numba.types.Tuple((numba.int32, numba.int32, numba.int32)), value_type=numba.int32)
         
-        sp_uct_core(self.simulation_limit, self.horizon, self.c, self.gamma, self.p, self.rollout_limit, self.dynamics, T_s, Q_hat, V_hat, T_sa, child_nodes, n_states, n_counter, self.reward_offset, self.reward_scale)
+        sp_uct_core(self.simulation_limit, self.horizon, self.c, self.gamma, self.p, self.rollout_limit, 
+                   self.step_fn, self.rollout_fn, self.params, n_actions,
+                   T_s, Q_hat, V_hat, T_sa, child_nodes, n_states, n_counter, self.reward_offset, self.reward_scale)
 
         return int(np.argmax(Q_hat[0])), {"root": None, "root_v": float(V_hat[0])}
 

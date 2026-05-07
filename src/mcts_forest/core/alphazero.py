@@ -7,7 +7,6 @@ import torch.nn.functional as F
 from numba import njit
 from numba.typed import Dict as NumbaDict
 from typing import Tuple, Dict, Any, List
-from mcts_forest.core.base import sample_discrete_transition, TorchModelAdapter, ExperienceBuffer
 
 class AlphaZeroNet(nn.Module):
     def __init__(self, obs_dim=16, n_actions=4, hidden_dim=64):
@@ -23,8 +22,7 @@ class AlphaZeroNet(nn.Module):
         return self.policy_head(x), torch.sigmoid(self.value_head(x))
 
 @njit(cache=True)
-def alphazero_core(n_sim, horizon, initial_state, c_puct, gamma, dynamics, visit_count, q_hat, v_hat, action_visits, priors, state_h_to_node, node_states, node_counter, model_v, model_p):
-    transitions, rewards, dones, probs_cum = dynamics
+def alphazero_core(n_sim, horizon, initial_state, c_puct, gamma, step_fn, params, n_actions, visit_count, q_hat, v_hat, action_visits, priors, state_h_to_node, node_states, node_counter, model_v, model_p):
     for _ in range(n_sim):
         curr_node = np.int32(0)
         curr_h = 0
@@ -37,17 +35,15 @@ def alphazero_core(n_sim, horizon, initial_state, c_puct, gamma, dynamics, visit
             sqrt_n_p = math.sqrt(n_p) if n_p > 0 else 1.0
             
             best_val, best_a = -1e18, -1
-            for a in range(q_hat.shape[1]):
-                # Standard PUCT
+            for a in range(n_actions):
                 score = q_hat[curr_node, a] + c_puct * priors[curr_node, a] * sqrt_n_p / (1 + action_visits[curr_node, a])
                 if score > best_val: best_val, best_a = score, a
             
             a = best_a
-            next_s, r, done = sample_discrete_transition(s_idx, a, transitions, rewards, dones, probs_cum)
+            # Use procedural step
+            next_s, r, done = step_fn(s_idx, a, *params)
             
-            # Key with (state, history_index) ensures it's a TREE
             s_key = (np.int32(next_s), np.int32(curr_h + 1))
-            
             if s_key in state_h_to_node:
                 next_node = np.int32(state_h_to_node[s_key])
             else:
@@ -72,12 +68,10 @@ def alphazero_core(n_sim, horizon, initial_state, c_puct, gamma, dynamics, visit
             n_id, a, r = p_nodes[i], p_a[i], p_r[i]
             action_visits[n_id, a] += 1
             visit_count[n_id] += 1
-            # Standard Arithmetic Mean Backup
             q_hat[n_id, a] += (r + gamma * v_back - q_hat[n_id, a]) / action_visits[n_id, a]
             
-            # Node value is just the max (or mean) of Q values
             best_q = -1e18
-            for act in range(q_hat.shape[1]):
+            for act in range(n_actions):
                 if q_hat[n_id, act] > best_q:
                     best_q = q_hat[n_id, act]
             v_hat[n_id] = best_q
@@ -87,9 +81,15 @@ class AlphaZero:
     def __init__(self, env, model_adapter, c_puct=1.25, gamma=0.99, simulation_limit=100, **kwargs):
         self.env, self.model = env, model_adapter.model.to(model_adapter.device)
         self.c_puct, self.gamma, self.simulation_limit = c_puct, gamma, simulation_limit
-        self.dynamics = env.get_numba_dynamics()
-        self.n_actions = self.dynamics[0].shape[1]
-        self.obs_dim = self.dynamics[0].shape[0] # Note: This assumes discrete state space index
+        
+        # Enforce procedural dynamics
+        try:
+            self.step_fn, _, self.params = env.get_procedural_dynamics()
+        except (AttributeError, NotImplementedError) as e:
+            raise RuntimeError(f"AlphaZero requires procedural dynamics: {e}")
+            
+        self.n_actions = env.action_space_size
+        self.obs_dim = env.observation_space.n
         self.horizon = 100
 
     def search(self, initial_state: int) -> Tuple[int, Dict[str, Any]]:
@@ -106,7 +106,9 @@ class AlphaZero:
         model_v, model_p = self._get_predictions()
         v_hat[0], priors[0] = model_v[initial_state], model_p[initial_state]
         
-        alphazero_core(self.simulation_limit, self.horizon, initial_state, self.c_puct, self.gamma, self.dynamics, v_count, q_hat, v_hat, a_visits, priors, state_h_to_node, n_states, n_counter, model_v, model_p)
+        alphazero_core(self.simulation_limit, self.horizon, initial_state, self.c_puct, self.gamma, 
+                      self.step_fn, self.params, n_actions,
+                      v_count, q_hat, v_hat, a_visits, priors, state_h_to_node, n_states, n_counter, model_v, model_p)
         return int(np.argmax(a_visits[0])), {"action_visits": a_visits[0].copy()}
 
     def _get_predictions(self):

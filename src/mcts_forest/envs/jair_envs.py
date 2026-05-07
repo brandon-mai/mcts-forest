@@ -2,6 +2,12 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 from typing import Tuple, Dict, Any, List, Optional
+from mcts_forest.envs.procedural import (
+    river_swim_step, river_swim_rollout,
+    four_rooms_step, four_rooms_rollout,
+    passenger_grid_step, passenger_grid_rollout,
+    sysadmin_ring_step, sysadmin_ring_rollout
+)
 
 class FactoredRiverSwimEnv(gym.Env):
     def __init__(self, num_rivers=4, num_locations=8, time_limit=35, render_mode=None, **kwargs):
@@ -12,7 +18,6 @@ class FactoredRiverSwimEnv(gym.Env):
         self.time_limit = time_limit
         self.action_space = spaces.Discrete(1 << num_rivers)
         self.observation_space = spaces.Discrete((num_locations ** num_rivers) * (time_limit + 1))
-        self._P = None
         self.reset()
 
     def get_fingerprint(self):
@@ -77,60 +82,10 @@ class FactoredRiverSwimEnv(gym.Env):
         if all_at_goal and all_swim_up: reward += float(self.num_rivers)
         return reward / (2.0 * self.num_rivers)
 
-    @property
-    def P(self):
-        if self._P is not None: return self._P
-        ns = self.observation_space.n
-        na = self.action_space.n
-        tl = self.time_limit
-        P = {s: {a: [] for a in range(na)} for s in range(ns)}
-        
-        # Precompute river-wise outcomes for (pos, bit)
-        # river_outcomes[pos][bit] = [(prob, next_pos)]
-        river_outcomes = []
-        for pos in range(self.num_locations):
-            pos_bits = []
-            for bit in [0, 1]:
-                if bit == 0: outcomes = [(1.0, max(0, pos - 1))]
-                elif pos == 0: outcomes = [(0.4, 0), (0.6, 1)]
-                elif pos == self.num_locations - 1: outcomes = [(0.4, self.num_locations - 2), (0.6, self.num_locations - 1)]
-                else: outcomes = [(0.05, pos-1), (0.60, pos), (0.35, pos+1)]
-                pos_bits.append(outcomes)
-            river_outcomes.append(pos_bits)
 
-        for s in range(ns):
-            t = s % (tl + 1)
-            if t >= tl: continue
-            
-            sid = s // (tl + 1)
-            temp_sid = sid
-            pos_list = []
-            for _ in range(self.num_rivers):
-                pos_list.append(temp_sid % self.num_locations)
-                temp_sid //= self.num_locations
-            pos_arr = np.array(pos_list)
-
-            for a in range(na):
-                a_bits = [(a >> i) & 1 for i in range(self.num_rivers)]
-                reward = self._compute_reward(pos_arr, a_bits)
-                
-                # Combine outcomes
-                cur_outcomes = [(1.0, 0)] # (prob, next_sid)
-                factor = 1
-                for r in range(self.num_rivers):
-                    r_out = river_outcomes[pos_list[r]][a_bits[r]]
-                    next_level = []
-                    for p1, s1 in cur_outcomes:
-                        for p2, pos2 in r_out:
-                            next_level.append((p1 * p2, s1 + pos2 * factor))
-                    cur_outcomes = next_level
-                    factor *= self.num_locations
-                
-                for prob, next_sid in cur_outcomes:
-                    next_s = next_sid * (tl + 1) + (t + 1)
-                    P[s][a].append((prob, next_s, reward, (t + 1 >= tl)))
-        self._P = P
-        return self._P
+    def get_procedural_dynamics(self):
+        params = (self.num_rivers, self.num_locations, self.time_limit)
+        return river_swim_step, river_swim_rollout, params
 
 class FourRoomsEnv(gym.Env):
     def __init__(self, n=5, time_limit=50, slippery=True, render_mode=None, **kwargs):
@@ -142,28 +97,37 @@ class FourRoomsEnv(gym.Env):
         self.slippery = slippery
         self.action_space = spaces.Discrete(4)
         self.observation_space = spaces.Discrete(self.grid_size * self.grid_size * (time_limit + 1))
-        self.doors = [n*self.grid_size+0, n*self.grid_size+(n+1), 0*self.grid_size+n, (n+1)*self.grid_size+n]
-        self.reset()
-
-    def get_fingerprint(self):
-        return ("FourRooms", self.n, self.grid_size, self.time_limit, self.slippery)
-
-    def reset(self, seed=None, options=None):
-        super().reset(seed=seed)
+        
+        # Initialize goal and doors here to make environment stationary for its lifetime
+        self.np_random, _ = gym.utils.seeding.np_random(kwargs.get("seed", None))
         self.doors = [
             self.n * self.grid_size + self.np_random.integers(0, self.n),
             self.n * self.grid_size + (self.n + 1 + self.np_random.integers(0, self.n)),
             self.np_random.integers(0, self.n) * self.grid_size + self.n,
             (self.n + 1 + self.np_random.integers(0, self.n)) * self.grid_size + self.n
         ]
-        candidates = [(x,y) for y in range(self.grid_size) for x in range(self.grid_size) if not self._is_wall(x,y)]
+        idx_doors = set(self.doors)
+        candidates = []
+        for y in range(self.grid_size):
+            for x in range(self.grid_size):
+                if not (x == self.n or y == self.n) and (y * self.grid_size + x) not in idx_doors:
+                    candidates.append((x, y))
         idx1, idx2 = self.np_random.integers(len(candidates), size=2)
         while idx1 == idx2: idx2 = self.np_random.integers(len(candidates))
-        self.x, self.y = candidates[idx1]
+        self.start_x, self.start_y = candidates[idx1]
         self.goal_x, self.goal_y = candidates[idx2]
+        
+        self.reset()
+
+    def get_fingerprint(self):
+        return ("FourRooms", self.n, self.grid_size, self.time_limit, self.slippery, tuple(self.doors), self.goal_x, self.goal_y)
+
+    def reset(self, seed=None, options=None):
+        if seed is not None:
+            super().reset(seed=seed)
+        self.x, self.y = self.start_x, self.start_y
         self.time = 0
         self.s = self.get_state()
-        self._P = None
         return self.s, {}
 
     def _is_wall(self, x, y):
@@ -196,30 +160,11 @@ class FourRoomsEnv(gym.Env):
         self.s = self.get_state()
         return self.s, reward, terminated, False, {}
 
-    @property
-    def P(self):
-        if self._P is not None: return self._P
-        P = {s: {a: [] for a in range(4)} for s in range(self.observation_space.n)}
-        for s in range(self.observation_space.n):
-            t = s % (self.time_limit + 1)
-            if t >= self.time_limit: continue
-            pos = s // (self.time_limit + 1)
-            x, y = pos % self.grid_size, pos // self.grid_size
-            if x == self.goal_x and y == self.goal_y: continue
-            for a in range(4):
-                if self.slippery: outcomes = [(0.25, (a+3)%4), (0.5, a), (0.25, (a+1)%4)]
-                else: outcomes = [(1.0, a)]
-                for prob, eff_a in outcomes:
-                    dx, dy = [(-1, 0), (0, 1), (1, 0), (0, -1)][eff_a]
-                    nx, ny = x + dx, y + dy
-                    if not (0 <= nx < self.grid_size and 0 <= ny < self.grid_size and not self._is_wall(nx, ny)):
-                        nx, ny = x, y
-                    next_s = (ny * self.grid_size + nx) * (self.time_limit + 1) + (t + 1)
-                    reward = (1.0 - 0.9 * ((t+1) / self.time_limit)) if (nx == self.goal_x and ny == self.goal_y) else 0.0
-                    done = (nx == self.goal_x and ny == self.goal_y) or (t + 1 >= self.time_limit)
-                    P[s][a].append((prob, next_s, reward, done))
-        self._P = P
-        return self._P
+
+    def get_procedural_dynamics(self):
+        doors_arr = np.array(self.doors, dtype=np.int32)
+        params = (self.n, self.grid_size, self.time_limit, self.slippery, doors_arr, self.goal_x, self.goal_y)
+        return four_rooms_step, four_rooms_rollout, params
 
 class PassengerGridEnv(gym.Env):
     def __init__(self, time_limit=70, slippery=True, render_mode=None, **kwargs):
@@ -274,37 +219,14 @@ class PassengerGridEnv(gym.Env):
         self.s = self.get_state()
         return self.s, reward, terminated, False, {}
 
-    @property
-    def P(self):
-        if hasattr(self, "_P") and self._P is not None: return self._P
-        P = {s: {a: [] for a in range(4)} for s in range(self.observation_space.n)}
-        for s in range(self.observation_space.n):
-            t = s % (self.time_limit + 1)
-            if t >= self.time_limit: continue
-            encoded = s // (self.time_limit + 1)
-            mask = encoded & ((1 << self.num_passengers) - 1)
-            spatial_id = encoded >> self.num_passengers
-            x, y = spatial_id % self.width, spatial_id // self.width
-            if x == self.goal_pos[0] and y == self.goal_pos[1]: continue
-            for a in range(4):
-                if self.slippery: outcomes = [(0.25, (a+3)%4), (0.5, a), (0.25, (a+1)%4)]
-                else: outcomes = [(1.0, a)]
-                for prob, eff_a in outcomes:
-                    dx, dy = [(-1, 0), (0, 1), (1, 0), (0, -1)][eff_a]
-                    nx, ny = x + dx, y + dy
-                    if not (0 <= nx < self.width and 0 <= ny < self.height): nx, ny = x, y
-                    n_mask = mask
-                    for i, (px, py) in enumerate(self.passenger_positions):
-                        if nx == px and ny == py: n_mask |= (1 << i)
-                    reward = [0.0, 1.0, 3.0, 7.0][bin(n_mask).count('1')] if (nx == self.goal_pos[0] and ny == self.goal_pos[1]) else 0.0
-                    done = (nx == self.goal_pos[0] and ny == self.goal_pos[1]) or (t + 1 >= self.time_limit)
-                    next_s = ((ny * self.width + nx) << self.num_passengers | n_mask) * (self.time_limit + 1) + (t + 1)
-                    P[s][a].append((prob, next_s, reward, done))
-        self._P = P
-        return self._P
+
+    def get_procedural_dynamics(self):
+        pass_pos_arr = np.array(self.passenger_positions, dtype=np.int32)
+        params = (self.width, self.height, self.time_limit, self.slippery, pass_pos_arr, self.goal_pos[0], self.goal_pos[1])
+        return passenger_grid_step, passenger_grid_rollout, params
 
 class SysadminRingEnv(gym.Env):
-    def __init__(self, num_computers=10, time_limit=50, render_mode=None, **kwargs):
+    def __init__(self, num_computers=20, time_limit=50, render_mode=None, **kwargs):
         super().__init__()
         self.render_mode = render_mode
         self.num_computers, self.time_limit = num_computers, time_limit
@@ -317,7 +239,7 @@ class SysadminRingEnv(gym.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        self.mask, self.time = (1 << self.num_computers) - 1, 0
+        self.mask, self.time = 0, 0
         self.s = self.get_state()
         return self.s, {}
 
@@ -336,54 +258,15 @@ class SysadminRingEnv(gym.Env):
             else:
                 prev_running = (self.mask >> ((i - 1 + self.num_computers) % self.num_computers)) & 1
                 self_running = (self.mask >> i) & 1
-                p = [0.0238, 0.525, 0.0475, 0.95][(self_running << 1) | prev_running]
+                p = [0.0238, 0.0475, 0.525, 0.95][(self_running << 1) | prev_running]
                 if self.np_random.random() < p: next_mask |= (1 << i)
         self.mask, self.time = next_mask, self.time + 1
         reward = bin(self.mask).count('1') / self.num_computers
         self.s = self.get_state()
         return self.s, reward, self.time >= self.time_limit, False, {}
 
-    @property
-    def P(self):
-        if hasattr(self, "_P") and self._P is not None: return self._P
-        ns = self.observation_space.n
-        na = self.action_space.n
-        tl = self.time_limit
-        nc = self.num_computers
-        P = {s: {a: [] for a in range(na)} for s in range(ns)}
-        
-        for s in range(ns):
-            t = s % (tl + 1)
-            if t >= tl: continue
-            mask = s // (tl + 1)
-            
-            # Precompute machine-wise r_outcomes for this mask
-            all_machine_probs = []
-            for i in range(nc):
-                prev_machine = (i - 1 + nc) % nc
-                prev_running = (mask >> prev_machine) & 1
-                self_running = (mask >> i) & 1
-                p_stay = [0.0238, 0.525, 0.0475, 0.95][(self_running << 1) | prev_running]
-                all_machine_probs.append(p_stay)
 
-            for a in range(na):
-                # Combined probabilities of all computers
-                outcomes = [(1.0, 0)] # (prob, next_mask)
-                for i in range(nc):
-                    if a == i: r_out = [(1.0, 1)]
-                    else:
-                        p_stay = all_machine_probs[i]
-                        r_out = [(p_stay, 1), (1.0 - p_stay, 0)]
-                    
-                    next_level = []
-                    for p1, m1 in outcomes:
-                        for p2, bit2 in r_out:
-                            next_level.append((p1 * p2, m1 | (bit2 << i)))
-                    outcomes = next_level
-                
-                for prob, n_mask in outcomes:
-                    reward = bin(n_mask).count('1') / nc
-                    next_s = n_mask * (tl + 1) + (t + 1)
-                    P[s][a].append((prob, next_s, reward, (t + 1 >= tl)))
-        self._P = P
-        return self._P
+    def get_procedural_dynamics(self):
+        probs_arr = np.array([0.0238, 0.0475, 0.525, 0.95], dtype=np.float64)
+        params = (self.num_computers, self.time_limit, probs_arr)
+        return sysadmin_ring_step, sysadmin_ring_rollout, params

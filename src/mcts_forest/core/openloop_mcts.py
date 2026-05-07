@@ -4,12 +4,9 @@ import numba
 from numba import njit
 from numba.typed import Dict as NumbaDict
 from typing import Tuple, Dict, Any
-from mcts_forest.core.base import sample_discrete_transition, random_rollout_discrete
-from mcts_forest.utils.visualizer import SurrogateNode
 
 @njit(cache=True)
-def openloop_mcts_core(n_sim, horizon, initial_state, c, gamma, rollout_limit, dynamics, visit_count, q_hat, action_visits, child_nodes, node_counter, reward_offset, reward_scale):
-    transitions, rewards, dones, probs_cum = dynamics
+def openloop_mcts_core(n_sim, horizon, initial_state, c, gamma, rollout_limit, step_fn, rollout_fn, params, n_actions, visit_count, q_hat, action_visits, child_nodes, node_counter, reward_offset, reward_scale):
     for _ in range(n_sim):
         curr_node, curr_h = 0, 0
         curr_s = initial_state
@@ -18,10 +15,9 @@ def openloop_mcts_core(n_sim, horizon, initial_state, c, gamma, rollout_limit, d
         v_leaf = 0.0
         
         while curr_h < horizon:
-            # Selection (UCB1 over action sequences)
             best_val, best_a, n_p = -1e18, -1, visit_count[curr_node]
             ln_p = math.log(n_p) if n_p > 0 else 0.0
-            for a in range(q_hat.shape[1]):
+            for a in range(n_actions):
                 n_sa = action_visits[curr_node, a]
                 if n_sa == 0:
                     best_a = a
@@ -31,12 +27,10 @@ def openloop_mcts_core(n_sim, horizon, initial_state, c, gamma, rollout_limit, d
                     best_val, best_a = val, a
             
             a = best_a
-            # Sample environment transition for the chosen action sequence step
-            next_s, r, done = sample_discrete_transition(curr_s, a, transitions, rewards, dones, probs_cum)
+            # Use procedural step
+            next_s, r, done = step_fn(curr_s, a, *params)
             
-            # Internal normalization
             r_int = (r + reward_offset) * reward_scale
-            
             key = (np.int32(curr_node), np.int32(a))
             if key in child_nodes:
                 next_node = child_nodes[key]
@@ -50,18 +44,17 @@ def openloop_mcts_core(n_sim, horizon, initial_state, c, gamma, rollout_limit, d
                 v_leaf = 0.0
                 break
             if next_node == -1:
-                # Expansion: Create new action-sequence node
                 new_id = node_counter[0]
                 node_counter[0] += 1
                 child_nodes[key] = new_id
-                v_leaf = random_rollout_discrete(next_s, transitions, rewards, dones, probs_cum, rollout_limit, gamma, reward_offset, reward_scale)
+                # Use procedural rollout
+                v_leaf = (rollout_fn(next_s, *params, rollout_limit, gamma) + reward_offset) * reward_scale
                 visit_count[new_id] = 1
                 break
             curr_node, curr_h, curr_s = next_node, curr_h + 1, next_s
         else:
-            v_leaf = random_rollout_discrete(curr_s, transitions, rewards, dones, probs_cum, rollout_limit, gamma, reward_offset, reward_scale)
+            v_leaf = (rollout_fn(curr_s, *params, rollout_limit, gamma) + reward_offset) * reward_scale
 
-        # Backpropagation
         v_nxt = v_leaf
         for i in range(p_len - 1, -1, -1):
             n_id, a, r_int = p_nodes[i], p_a[i], p_r_int[i]
@@ -77,16 +70,23 @@ class OpenLoopMCTS:
         self.env, self.c, self.horizon, self.gamma, self.rollout_limit, self.simulation_limit = env, c, horizon, gamma, rollout_limit, simulation_limit
         self.reward_offset = internal_reward_offset
         self.reward_scale = internal_reward_scale
-        self.dynamics = env.get_numba_dynamics()
+        
+        # Enforce procedural dynamics
+        try:
+            self.step_fn, self.rollout_fn, self.params = env.get_procedural_dynamics()
+        except (AttributeError, NotImplementedError) as e:
+            raise RuntimeError(f"OpenLoopMCTS requires procedural dynamics: {e}")
 
     def search(self, initial_state: int) -> Tuple[int, Dict[str, Any]]:
-        # Root is node 0. Each following node represents an action sequence level.
+        n_actions = self.env.action_space_size
         max_n = self.simulation_limit + 1
-        v_count, q_hat, a_visits = np.zeros(max_n, dtype=np.int32), np.zeros((max_n, self.dynamics[0].shape[1]), dtype=np.float32), np.zeros((max_n, self.dynamics[0].shape[1]), dtype=np.int32)
+        v_count, q_hat, a_visits = np.zeros(max_n, dtype=np.int32), np.zeros((max_n, n_actions), dtype=np.float32), np.zeros((max_n, n_actions), dtype=np.int32)
         n_counter = np.array([1], dtype=np.int32)
         child_nodes = NumbaDict.empty(key_type=numba.types.Tuple((numba.int32, numba.int32)), value_type=numba.int32)
         
-        openloop_mcts_core(self.simulation_limit, self.horizon, initial_state, self.c, self.gamma, self.rollout_limit, self.dynamics, v_count, q_hat, a_visits, child_nodes, n_counter, self.reward_offset, self.reward_scale)
+        openloop_mcts_core(self.simulation_limit, self.horizon, initial_state, self.c, self.gamma, self.rollout_limit, 
+                          self.step_fn, self.rollout_fn, self.params, n_actions,
+                          v_count, q_hat, a_visits, child_nodes, n_counter, self.reward_offset, self.reward_scale)
         
         return int(np.argmax(q_hat[0])), {"root": None, "root_v": float(np.max(q_hat[0]))}
 

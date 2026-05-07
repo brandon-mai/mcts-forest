@@ -109,10 +109,11 @@ def run_episode(env_name, solver_name, sims, seed=None, episode_idx=0, solver_kw
     if seed is not None: env_kwargs_with_seed["seed"] = seed
         
     env = REGISTRY.get_env(env_name, **env_kwargs_with_seed)
-    solver = REGISTRY.get_solver(solver_name, env, simulation_limit=sims, **solver_kwargs)
     
     reset_seed = (seed * 1000 + episode_idx) if seed is not None else None
     obs = env.reset(seed=reset_seed)
+
+    solver = REGISTRY.get_solver(solver_name, env, simulation_limit=sims, **solver_kwargs)
     terminated, truncated = False, False
     total_reward, steps, search_times = 0, 0, []
     info = {}

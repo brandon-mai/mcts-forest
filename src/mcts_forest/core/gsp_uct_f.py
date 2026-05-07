@@ -4,11 +4,9 @@ import numba
 from numba import njit
 from numba.typed import Dict as NumbaDict
 from typing import Tuple, Dict, Any
-from mcts_forest.core.base import sample_discrete_transition, random_rollout_discrete
 
 @njit(cache=True)
-def gsp_uct_full_core(n_sim, horizon, initial_state, c, gamma, p, rollout_limit, dynamics, T_s, Q_hat, V_hat, T_sa, state_to_node, node_states, node_counter, reward_offset, reward_scale):
-    transitions, rewards, dones, probs_cum = dynamics
+def gsp_uct_full_core(n_sim, horizon, initial_state, c, gamma, p, rollout_limit, step_fn, rollout_fn, params, n_actions, T_s, Q_hat, V_hat, T_sa, state_to_node, node_states, node_counter, reward_offset, reward_scale):
     p_nodes = np.empty(horizon + 1, dtype=np.int32)
     p_a = np.empty(horizon + 1, dtype=np.int32)
     p_r_int = np.empty(horizon + 1, dtype=np.float32)
@@ -22,7 +20,7 @@ def gsp_uct_full_core(n_sim, horizon, initial_state, c, gamma, p, rollout_limit,
             s_idx = node_states[curr_node]
             best_val, best_a, n_p = -1e18, -1, T_s[curr_node]
             
-            for a in range(Q_hat.shape[1]):
+            for a in range(n_actions):
                 n_sa = T_sa[curr_node, a]
                 if n_sa == 0:
                     best_a = a
@@ -33,11 +31,10 @@ def gsp_uct_full_core(n_sim, horizon, initial_state, c, gamma, p, rollout_limit,
                     best_val, best_a = val, a
             
             a = best_a
-            next_s, r, done = sample_discrete_transition(s_idx, a, transitions, rewards, dones, probs_cum)
+            # Use procedural step
+            next_s, r, done = step_fn(s_idx, a, *params)
             
-            # Internal normalization
             r_int = (r + reward_offset) * reward_scale
-            
             s_key = np.int32(next_s)
             if s_key in state_to_node:
                 next_node = state_to_node[s_key]
@@ -51,12 +48,12 @@ def gsp_uct_full_core(n_sim, horizon, initial_state, c, gamma, p, rollout_limit,
                 v_leaf = 0.0
                 break
             if next_node == -1:
-                # Expand Node
                 new_id = node_counter[0]
                 node_counter[0] += 1
                 state_to_node[np.int32(next_s)] = new_id
                 node_states[new_id] = next_s
-                v_leaf = random_rollout_discrete(next_s, transitions, rewards, dones, probs_cum, rollout_limit, gamma, reward_offset, reward_scale)
+                # Use procedural rollout
+                v_leaf = (rollout_fn(next_s, *params, rollout_limit, gamma) + reward_offset) * reward_scale
                 
                 V_hat[new_id] = v_leaf
                 T_s[new_id] = 1
@@ -64,7 +61,7 @@ def gsp_uct_full_core(n_sim, horizon, initial_state, c, gamma, p, rollout_limit,
             
             curr_node, curr_h = next_node, curr_h + 1
         else:
-            v_leaf = random_rollout_discrete(node_states[curr_node], transitions, rewards, dones, probs_cum, rollout_limit, gamma, reward_offset, reward_scale)
+            v_leaf = (rollout_fn(node_states[curr_node], *params, rollout_limit, gamma) + reward_offset) * reward_scale
 
         v_back = v_leaf
         for i in range(p_len - 1, -1, -1):
@@ -76,20 +73,20 @@ def gsp_uct_full_core(n_sim, horizon, initial_state, c, gamma, p, rollout_limit,
             T_s[n_id] = n_p
             
             q_min = 1e18
-            for act in range(Q_hat.shape[1]):
+            for act in range(n_actions):
                 if T_sa[n_id, act] > 0 and Q_hat[n_id, act] < q_min:
                     q_min = Q_hat[n_id, act]
             curr_shift = max(0.0, -q_min) + reward_scale
             
             if math.isinf(p):
                 max_q = -1e18
-                for act in range(Q_hat.shape[1]):
+                for act in range(n_actions):
                     if T_sa[n_id, act] > 0 and Q_hat[n_id, act] > max_q:
                         max_q = Q_hat[n_id, act]
                 V_hat[n_id] = max_q
             else:
                 weighted_sum = 0.0
-                for act in range(Q_hat.shape[1]):
+                for act in range(n_actions):
                     n_act = T_sa[n_id, act]
                     if n_act > 0:
                         q_val = Q_hat[n_id, act] + curr_shift
@@ -107,22 +104,29 @@ class GSPUCTFull:
         else:
             self.p = float(p)
         self.gamma, self.rollout_limit, self.simulation_limit = gamma, rollout_limit, simulation_limit
-        self.reward_offset = internal_reward_offset
-        self.reward_scale = internal_reward_scale
-        self.init_q = init_q
-        self.dynamics = env.get_numba_dynamics()
+        self.reward_offset, self.reward_scale, self.init_q = internal_reward_offset, internal_reward_scale, init_q
+        
+        # Enforce procedural dynamics
+        try:
+            self.step_fn, self.rollout_fn, self.params = env.get_procedural_dynamics()
+        except (AttributeError, NotImplementedError) as e:
+            raise RuntimeError(f"GSPUCTFull requires procedural dynamics: {e}")
+            
         self.horizon = int(math.ceil(math.log(self.simulation_limit) / (2 * math.log(1.0 / self.gamma))))
 
     def search(self, initial_state: int) -> Tuple[int, Dict[str, Any]]:
+        n_actions = self.env.action_space_size
         max_n = self.simulation_limit * 10 + 1
-        T_s, Q_hat, V_hat = np.zeros(max_n, dtype=np.int32), np.full((max_n, self.dynamics[0].shape[1]), self.init_q, dtype=np.float32), np.full(max_n, self.init_q, dtype=np.float32)
-        T_sa, n_states, n_counter = np.zeros((max_n, self.dynamics[0].shape[1]), dtype=np.int32), np.zeros(max_n, dtype=np.int32), np.array([1], dtype=np.int32)
+        T_s, Q_hat, V_hat = np.zeros(max_n, dtype=np.int32), np.full((max_n, n_actions), self.init_q, dtype=np.float32), np.full(max_n, self.init_q, dtype=np.float32)
+        T_sa, n_states, n_counter = np.zeros((max_n, n_actions), dtype=np.int32), np.zeros(max_n, dtype=np.int32), np.array([1], dtype=np.int32)
         
         n_states[0] = initial_state
         state_to_node = NumbaDict.empty(key_type=numba.types.int32, value_type=numba.types.int32)
         state_to_node[np.int32(initial_state)] = np.int32(0)
         
-        gsp_uct_full_core(self.simulation_limit, self.horizon, initial_state, self.c, self.gamma, self.p, self.rollout_limit, self.dynamics, T_s, Q_hat, V_hat, T_sa, state_to_node, n_states, n_counter, self.reward_offset, self.reward_scale)
+        gsp_uct_full_core(self.simulation_limit, self.horizon, initial_state, self.c, self.gamma, self.p, self.rollout_limit, 
+                         self.step_fn, self.rollout_fn, self.params, n_actions,
+                         T_s, Q_hat, V_hat, T_sa, state_to_node, n_states, n_counter, self.reward_offset, self.reward_scale)
         
         return int(np.argmax(Q_hat[0])), {"root_v": float(V_hat[0]), "horizon": self.horizon, "nodes": int(n_counter[0])}
 

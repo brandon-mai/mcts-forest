@@ -34,9 +34,11 @@ class ChanceNode:
 
 class GSPStochasticMuZero:
     def __init__(self, env, model_adapter: TorchModelAdapter, c_puct=1.25, p=2.0, gamma=0.99, simulation_limit=100, **kwargs):
+        self.env = env
         self.model = model_adapter.model.to(model_adapter.device)
         self.device, self.c_puct, self.p, self.gamma, self.simulation_limit = model_adapter.device, c_puct, p, gamma, simulation_limit
-        self.n_actions = 4
+        self.n_actions = env.action_space_size
+        self.obs_dim = env.observation_space.n
 
     def search(self, state_idx: int) -> Tuple[int, Dict[str, Any]]:
         self.model.eval()
@@ -44,7 +46,7 @@ class GSPStochasticMuZero:
         horizon = int(math.ceil(math.log(n_sim) / (2 * math.log(1.0 / self.gamma)))) if self.gamma < 1.0 else 100
         
         with torch.no_grad():
-            s_oh = torch.zeros(1, 16).to(self.device); s_oh[0, state_idx] = 1.0
+            s_oh = torch.zeros(1, self.obs_dim).to(self.device); s_oh[0, state_idx] = 1.0
             h0 = self.model.represent(s_oh)
             pi_log, _ = self.model.predict(h0)
             root = GSPStochasticMuZeroNode(h0, 0.0)

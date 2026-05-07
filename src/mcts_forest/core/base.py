@@ -7,33 +7,6 @@ import torch.nn.functional as F
 from typing import List, Tuple, Any, Dict, Optional
 from numba import njit
 
-@njit(cache=True)
-def sample_discrete_transition(state, action, transitions, rewards, dones, probs_cum):
-    num_outcomes = transitions.shape[2]
-    r_val = np.random.random()
-    outcome_idx = num_outcomes - 1
-    for i in range(num_outcomes):
-        if r_val < probs_cum[state, action, i]:
-            outcome_idx = i
-            break
-    return transitions[state, action, outcome_idx], rewards[state, action, outcome_idx], dones[state, action, outcome_idx]
-
-@njit(cache=True)
-def random_rollout_discrete(state, transitions, rewards, dones, probs_cum, limit, gamma, reward_offset, reward_scale):
-    curr_s = state
-    total_r = 0.0
-    curr_g = 1.0
-    num_actions = transitions.shape[1]
-    for _ in range(limit):
-        a = np.random.randint(0, num_actions)
-        next_s, r, done = sample_discrete_transition(curr_s, a, transitions, rewards, dones, probs_cum)
-        # Apply internal transformation
-        r_int = (r + reward_offset) * reward_scale
-        total_r += curr_g * r_int
-        curr_g *= gamma
-        curr_s = next_s
-        if done: break
-    return total_r
 
 class ExperienceBuffer:
     """Stores (state, search_policy, final_outcome) for training Zero-style algorithms."""
