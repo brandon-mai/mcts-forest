@@ -223,3 +223,6 @@ results/
 checkpoints/
 wandb/
 *.txt
+test*
+*config.json
+.agents/

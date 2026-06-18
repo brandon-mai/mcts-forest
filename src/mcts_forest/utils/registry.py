@@ -1,26 +1,13 @@
 import os
-import torch
 import numpy as np
 from typing import Dict, Type, Any, Callable
 from functools import lru_cache
 from gymnasium.envs.toy_text.frozen_lake import generate_random_map
 from mcts_forest.envs.gym_adapter import GymAdapter
-from mcts_forest.core.uct import UCT
-from mcts_forest.core.stochastic_uct import StochasticUCT
-from mcts_forest.core.sp_uct import SPUCT
-from mcts_forest.core.openloop_mcts import OpenLoopMCTS
-from mcts_forest.core.mcgs import MCGS
 from mcts_forest.core.gsp_uct import GSPUCT
 from mcts_forest.core.gsp_uct_f import GSPUCTFull
 from mcts_forest.core.gbopd import GBOPD
 from mcts_forest.core.gbop import GBOP
-from mcts_forest.core.ments import MENTS
-from mcts_forest.core.gsp_alphazero import GSPAlphaZero, GSPAlphaZeroNet
-from mcts_forest.core.gsp_muzero import GSPMuZero, GSPMuZeroNet
-from mcts_forest.core.gsp_stochastic_muzero import GSPStochasticMuZero, GSPStochasticMuZeroNet
-from mcts_forest.core.alphazero import AlphaZero, AlphaZeroNet
-from mcts_forest.core.muzero import MuZero, MuZeroNet
-from mcts_forest.core.base import TorchModelAdapter
 from mcts_forest.core.random_agent import RandomAgent
 from mcts_forest.envs.jair_envs import FactoredRiverSwimEnv, FourRoomsEnv, PassengerGridEnv, SysadminRingEnv
 
@@ -103,27 +90,9 @@ REGISTRY.register_env("passenger_grid", lambda **kwargs: GymAdapter("PassengerGr
 REGISTRY.register_env("sysadmin", lambda **kwargs: GymAdapter("SysadminRing-v0", **kwargs))
 
 # 2. Register Solvers
-REGISTRY.register_solver("uct", lambda env, **kwargs: UCT(env, **kwargs))
-REGISTRY.register_solver("stochastic_uct", lambda env, **kwargs: StochasticUCT(env, **kwargs))
-REGISTRY.register_solver("sp_uct", lambda env, **kwargs: SPUCT(env, **kwargs))
-REGISTRY.register_solver("openloop_mcts", lambda env, **kwargs: OpenLoopMCTS(env, **kwargs))
-REGISTRY.register_solver("mcgs", lambda env, **kwargs: MCGS(env, **kwargs))
 REGISTRY.register_solver("gsp_uct", lambda env, **kwargs: GSPUCT(env, **kwargs))
 REGISTRY.register_solver("gsp_uct_f", lambda env, **kwargs: GSPUCTFull(env, **kwargs))
 REGISTRY.register_solver("gbopd", lambda env, **kwargs: GBOPD(env, **kwargs))
 REGISTRY.register_solver("gbop", lambda env, **kwargs: GBOP(env, **kwargs))
-REGISTRY.register_solver("ments", lambda env, **kwargs: MENTS(env, **kwargs))
 
-def _get_zero_solver(env, solver_class, net_class, algo_name, **kwargs):
-    model_path = f"checkpoints/{algo_name}/latest.pt"
-    adapter = TorchModelAdapter(net_class())
-    if os.path.exists(model_path):
-        adapter.load(model_path)
-    return solver_class(env, adapter, **kwargs)
-
-REGISTRY.register_solver("gsp_alphazero", lambda env, **kwargs: _get_zero_solver(env, GSPAlphaZero, GSPAlphaZeroNet, "gsp_alphazero", **kwargs))
-REGISTRY.register_solver("gsp_muzero", lambda env, **kwargs: _get_zero_solver(env, GSPMuZero, GSPMuZeroNet, "gsp_muzero", **kwargs))
-REGISTRY.register_solver("gsp_stochastic_muzero", lambda env, **kwargs: _get_zero_solver(env, GSPStochasticMuZero, GSPStochasticMuZeroNet, "gsp_stochastic_muzero", **kwargs))
-REGISTRY.register_solver("alphazero", lambda env, **kwargs: _get_zero_solver(env, AlphaZero, AlphaZeroNet, "alphazero", **kwargs))
-REGISTRY.register_solver("muzero", lambda env, **kwargs: _get_zero_solver(env, MuZero, MuZeroNet, "muzero", **kwargs))
 REGISTRY.register_solver("random", lambda env, **kwargs: RandomAgent(env, **kwargs))
