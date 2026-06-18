@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "gymnasium[classic-control,other,toy-text]>=1.2.3",
+    "gymnax",
+    "httpx>=0.28.1",
+    "jumanji",
     "matplotlib>=3.10.8",
     "moviepy>=2.2.1",
     "numba>=0.65.0",
@@ -15,19 +18,21 @@ dependencies = [
     "pytest-cov>=7.1.0",
     "rich>=15.0.0",
     "setuptools<70.0.0",
-    "torch>=2.11.0",
-    "torchaudio>=2.11.0",
-    "torchvision>=0.26.0",
     "tqdm>=4.67.3",
-    "wandb>=0.19.1",
+    "websocket-client>=1.9.0",
 ]
 
 [tool.uv]
 package = true
 
+[tool.uv.sources]
+gymnax = { git = "https://github.com/RobertTLange/gymnax.git", rev = "main" }
+jumanji = { git = "https://github.com/instadeepai/jumanji.git" }
+
 [project.scripts]
 benchmark = "mcts_forest.scripts.benchmark:main"
-train = "mcts_forest.scripts.train_loop:main"
+benchmax = "mcts_forest.scripts.benchmax:main"
+remote = "mcts_forest.scripts.remote_kaggle:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,36 +1,5 @@
 # Monte Carlo Forest 🌲
 
-### Neural Solvers (AlphaZero, MuZero, Stochastic MuZero)
-Unified under the `GSP` prefix, these solvers use Numba-accelerated search cores and PyTorch neural networks.
-
-## Kaggle & Cloud Execution
-The framework is optimized for both local CPU development and Kaggle GPU training.
-
-### Local Development (Smoke Test)
-Run a quick iteration locally to verify the triple-variant logic:
-```bash
-uv run train --algo gsp_alphazero --iterations 1 --games_per_it 1 --sims 10 --wandb
-```
-
-### Kaggle GPU Deployment
-1.  **Accelerator**: Select `GPU P100` (recommended).
-2.  **Persistence**: Enable **Files Persistence** in Settings.
-3.  **Environment Setup**:
-    ```python
-    !pip install -q uv
-    !git clone <your-repo-url>
-    %cd mcts-forest
-    !uv pip install --system -e .
-    ```
-4.  **Triple-Variant Training**: By default, the script trains three concurrent models:
-    - **GSP**: Trained on GSP-solver data, evaluated with GSP.
-    - **Baseline**: Trained on Tree-search data, evaluated with Tree-search.
-    - **Cross**: Trained on Tree-search data, evaluated with GSP.
-    ```python
-    # Use python -m to avoid 'uv run' creating a large venv in the output folder
-    !python -m mcts_forest.scripts.train_loop --algo gsp_alphazero --env taxi --use_amp --wandb --wandb_key "YOUR_KEY_HERE" --iterations 5 --games_per_it 50 --sims 400
-    ```
-
 ## Development Strategy
 - **Surgical Changes**: We prioritize stability. Changes to the core math (like the Dynamic Power-Mean Shift) are ported across all solvers simultaneously to maintain parity.
 - **Performance**: We use Numba for tree operations and PyTorch for batch training.
@@ -121,6 +90,15 @@ uv run benchmark --env fourrooms_n5 --solver gbop --sims "(64, 128, 256, 512, 10
 - `--parallel`: Enable parallel episode execution.
 - `--show_tree`: Print the colorful MCTS tree to terminal during replay.
 - `--table`: Generate `result_table.txt` with a Markdown summary table.
+
+### Benchmaxxing
+
+Benchmark with JAX (!!!)
+```bash
+uv run benchmax --env 2048 --solver random --sims 100 --seeds 1000
+
+uv run benchmax --env fourrooms --solver random --sims 100 --seeds 1000
+```
 
 ## Visualization & Analysis
 
