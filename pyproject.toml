@@ -10,6 +10,7 @@ dependencies = [
     "httpx>=0.28.1",
     "jumanji",
     "matplotlib>=3.10.8",
+    "mctx>=0.0.71",
     "moviepy>=2.2.1",
     "numba>=0.65.0",
     "numpy>=2.4.4",

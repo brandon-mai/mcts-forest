@@ -23,6 +23,8 @@ from rich.rule import Rule
 
 from mcts_forest.utils.stats import bootstrap_stats
 from mcts_forest.utils.experiment import parse_dict
+from mcts_forest.core.jax_random import jax_random_search
+from mcts_forest.core.jax_spuct import jax_spuct_search
 
 console = Console()
 
@@ -39,7 +41,10 @@ def make_gymnax_fns(env_name: str):
         obs, next_state, reward, done, info = env.step(key, state, action, params)
         return next_state, obs, reward, done, info
         
-    return reset_fn, step_fn, int(env.num_actions)
+    action_mask_fn = lambda obs: jnp.ones(int(env.num_actions), dtype=jnp.bool_)
+    reward_norm_fn = lambda r: r
+    state_equal_fn = lambda s1, s2: jnp.all(s1.pos == s2.pos)
+    return reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, int(env.num_actions)
 
 def make_jumanji_fns(env_name: str):
     env = jumanji.make(env_name)
@@ -54,28 +59,15 @@ def make_jumanji_fns(env_name: str):
         reward = timestep.reward
         return next_state, timestep.observation, reward, done, {}
         
-    return reset_fn, step_fn, int(env.action_spec.num_values)
+    action_mask_fn = lambda obs: obs.action_mask
+    reward_norm_fn = lambda r: jnp.log2(r + 1.0) / jnp.log2(131072.0)
+    state_equal_fn = lambda s1, s2: jnp.all(s1.board == s2.board)
+    return reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, int(env.action_spec.num_values)
 
-# 2. Functional random solvers
+# 2. Vectorized simulation scan
 
-def random_solver_fourrooms(key, obs):
-    # FourRooms has 4 discrete actions
-    return jax.random.randint(key, (), 0, 4)
-
-def random_solver_2048(key, obs):
-    # obs is Observation with (board, action_mask)
-    # Sample from valid actions using action_mask
-    mask = obs.action_mask
-    probs = mask.astype(jnp.float32)
-    sum_probs = jnp.sum(probs)
-    # Avoid division by zero if all mask values are False (should not happen, but for safety)
-    probs = jnp.where(sum_probs > 0, probs / sum_probs, jnp.ones_like(probs) / 4.0)
-    return jax.random.choice(key, 4, p=probs)
-
-# 3. Vectorized simulation scan
-
-@partial(jax.jit, static_argnums=(1, 2, 3, 4, 5))
-def run_episodes_jax(key, reset_fn, step_fn, solver_fn, num_seeds, max_steps):
+@partial(jax.jit, static_argnums=(1, 2, 3, 4, 5, 6, 7, 8, 9))
+def run_episodes_jax(key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_seeds, max_steps):
     init_key, loop_key = jax.random.split(key)
     seed_keys = jax.random.split(init_key, num_seeds)
     
@@ -98,8 +90,10 @@ def run_episodes_jax(key, reset_fn, step_fn, solver_fn, num_seeds, max_steps):
         search_keys = subkeys[:num_seeds]
         env_keys = subkeys[num_seeds:]
         
-        # Parallel solver search
-        actions = jax.vmap(solver_fn)(search_keys, obss)
+        # Parallel solver search - pass only key, obs, state
+        actions = jax.vmap(solver_fn, in_axes=(0, 0, 0))(
+            search_keys, obss, states
+        )
         
         # Parallel environment step
         next_states, next_obss, rewards, dones, _ = jax.vmap(step_fn)(env_keys, states, actions)
@@ -155,39 +149,61 @@ def main():
     final_results_summary = []
     
     num_seeds = args.seeds * args.episodes
-    max_steps = 200
+    max_steps = 500
     
     console.print(f"[bold cyan]Starting benchmax with batch size {num_seeds}...[/bold cyan]")
     
     for env_name in envs:
         # Load environment fns
         if "fourrooms" in env_name.lower():
-            reset_fn, step_fn, num_actions = make_gymnax_fns("FourRooms-misc")
-            solver_fn = random_solver_fourrooms
+            reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions = make_gymnax_fns("FourRooms-misc")
             env_disp = "fourrooms"
         elif "2048" in env_name.lower():
-            reset_fn, step_fn, num_actions = make_jumanji_fns("Game2048-v1")
-            solver_fn = random_solver_2048
+            reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions = make_jumanji_fns("Game2048-v1")
             env_disp = "2048"
         else:
             console.print(f"[bold red]Unsupported environment: {env_name}[/bold red]")
             continue
             
         for solver_name in solvers:
-            if solver_name.lower() != "random":
-                console.print(f"[bold red]Unsupported solver: {solver_name} (only 'random' supported for now)[/bold red]")
+            if solver_name.lower() not in ["random", "spuct"]:
+                console.print(f"[bold red]Unsupported solver: {solver_name}[/bold red]")
                 continue
                 
             for sims in sims_list:
+                if solver_name.lower() == "random":
+                    solver_fn = partial(
+                        jax_random_search,
+                        env_step=step_fn,
+                        env_reset=reset_fn,
+                        action_mask_fn=action_mask_fn,
+                        reward_norm_fn=reward_norm_fn,
+                        state_equal_fn=state_equal_fn,
+                        num_actions=num_actions
+                    )
+                else:
+                    solver_fn = partial(
+                        jax_spuct_search,
+                        env_step=step_fn,
+                        env_reset=reset_fn,
+                        action_mask_fn=action_mask_fn,
+                        reward_norm_fn=reward_norm_fn,
+                        state_equal_fn=state_equal_fn,
+                        num_actions=num_actions,
+                        num_simulations=sims
+                    )
+                    
                 with console.status(f"[bold blue]Compiling JAX graph for {env_disp}...[/bold blue]"):
                     # Warmup run to compile
                     warmup_key = jax.random.PRNGKey(0)
-                    _ = run_episodes_jax(warmup_key, reset_fn, step_fn, solver_fn, num_seeds, max_steps)
+                    _ = run_episodes_jax(warmup_key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_seeds, max_steps)
                 
                 with console.status(f"[bold green]Running {num_seeds} vectorized episodes on device...[/bold green]"):
                     key = jax.random.PRNGKey(42)
                     t0 = time.time()
-                    rewards, steps, success = run_episodes_jax(key, reset_fn, step_fn, solver_fn, num_seeds, max_steps)
+                    rewards, steps, success = run_episodes_jax(
+                        key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_seeds, max_steps
+                    )
                     # Block to sync device
                     steps.block_until_ready()
                     elapsed = time.time() - t0

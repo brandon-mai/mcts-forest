@@ -976,6 +976,7 @@ dependencies = [
     { name = "httpx" },
     { name = "jumanji" },
     { name = "matplotlib" },
+    { name = "mctx" },
     { name = "moviepy" },
     { name = "numba" },
     { name = "numpy" },
@@ -995,6 +996,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "jumanji", git = "https://github.com/instadeepai/jumanji.git" },
     { name = "matplotlib", specifier = ">=3.10.8" },
+    { name = "mctx", specifier = ">=0.0.71" },
     { name = "moviepy", specifier = ">=2.2.1" },
     { name = "numba", specifier = ">=0.65.0" },
     { name = "numpy", specifier = ">=2.4.4" },
@@ -1005,6 +1007,20 @@ requires-dist = [
     { name = "setuptools", specifier = "<70.0.0" },
     { name = "tqdm", specifier = ">=4.67.3" },
     { name = "websocket-client", specifier = ">=1.9.0" },
+]
+
+[[package]]
+name = "mctx"
+version = "0.0.71"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "chex" },
+    { name = "jax" },
+    { name = "jaxlib" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ba/cc/6478f9d28768dbb83433306409d445398fa5b05b8d23fab16d06cac29998/mctx-0.0.71.tar.gz", hash = "sha256:f1546009fe5d714a10a200ffeb51e5b1ea4710f4b15f96ccb8d9874d9651941d", size = 404535, upload-time = "2026-06-15T10:33:46.985Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/af/f8/1702f59a448afc21a86a172e47c10327fde260617de04630dc8044b587de/mctx-0.0.71-py3-none-any.whl", hash = "sha256:15be68b6344ca93e3bc4ae5be3a7ced93609839909acecd896e7d17a73b9b87e", size = 482505, upload-time = "2026-06-15T10:33:45.515Z" },
 ]
 
 [[package]]

@@ -95,9 +95,11 @@ uv run benchmark --env fourrooms_n5 --solver gbop --sims "(64, 128, 256, 512, 10
 
 Benchmark with JAX (!!!)
 ```bash
-uv run benchmax --env 2048 --solver random --sims 100 --seeds 1000
+# Jumanji 2048
+uv run benchmax --env 2048 --solver spuct --sims 100 --seeds 1000
 
-uv run benchmax --env fourrooms --solver random --sims 100 --seeds 1000
+# Gymnax Four Rooms
+uv run benchmax --env fourrooms --solver spuct --sims 100 --seeds 1000
 ```
 
 ## Visualization & Analysis
