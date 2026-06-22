@@ -144,12 +144,14 @@ def main():
     parser.add_argument("--seeds", type=int, default=1000, help="Number of random seeds (vectorized batch size)")
     parser.add_argument("--output", type=str, default="results", help="Output directory")
     parser.add_argument("--table", action="store_true", help="Generate result_table.txt in markdown format")
+    parser.add_argument("--solver_args", type=str, default="{}", help="Solver hyperparameters as dict string")
     
     args = parser.parse_args()
     
     envs = parse_grid_item(args.env)
     solvers = parse_grid_item(args.solver)
     sims_list = sorted([int(s) for s in parse_grid_item(args.sims)])
+    solver_kwargs = parse_dict(args.solver_args)
     
     final_results_summary = []
     
@@ -195,7 +197,8 @@ def main():
                         reward_norm_fn=reward_norm_fn,
                         state_equal_fn=state_equal_fn,
                         num_actions=num_actions,
-                        num_simulations=sims
+                        num_simulations=sims,
+                        **solver_kwargs
                     )
                     
                 with console.status(f"[bold blue]Compiling JAX graph for {env_disp}...[/bold blue]"):
@@ -229,7 +232,7 @@ def main():
                     "DisplaySolver": solver_name,
                     "Env": env_disp,
                     "Sims": sims,
-                    "Kwargs": "-",
+                    "Kwargs": str(solver_kwargs) if solver_kwargs else "-",
                     "Success": f"{success_mean*100:.2f}% ± {success_bs_std*100:.2f}%",
                     "Reward": f"{reward_mean:.4f} ± {reward_bs_std:.4f}",
                     "Steps": f"{avg_steps:.2f}",

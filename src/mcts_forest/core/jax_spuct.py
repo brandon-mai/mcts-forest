@@ -22,13 +22,13 @@ def _rollout_fn(key, start_state, start_obs, rollout_depth, rollout_step_fn):
     return reward_sum
 
 def _forward_step(
-    f_carry, _,
+    f_carry, step_idx,
     action_mask_fn, env_step, state_equal_fn,
-    c, num_actions
+    c, num_actions, merge_mode, ucb_mode
 ):
     (
         u, curr_state, curr_obs, key, expanded_this_sim, is_done, next_empty_idx,
-        t_states, t_valid, t_V, t_T_s, t_Q, t_T_sa,
+        t_states, t_valid, t_depths, t_V, t_T_s, t_Q, t_T_sa,
         carry_expanded_state, carry_expanded_obs
     ) = f_carry
     
@@ -37,7 +37,11 @@ def _forward_step(
     
     # Select action
     mask = action_mask_fn(curr_obs)
-    ucb = t_Q[u] + c * jnp.power(t_T_s[u] + 1.0, 0.25) / (jnp.sqrt(t_T_sa[u]) + 1e-5)
+    if ucb_mode == "standard":
+        ucb = t_Q[u] + c * jnp.sqrt(t_T_s[u] + 1e-8) / (t_T_sa[u] + 1e-5)
+    else: # spuct
+        ucb = t_Q[u] + c * jnp.power(t_T_s[u] + 1.0, 0.25) / (jnp.sqrt(t_T_sa[u]) + 1e-5)
+        
     key, noise_key = jax.random.split(key)
     noise = jax.random.uniform(noise_key, shape=ucb.shape) * 1e-6
     ucb = jnp.where(mask, ucb + noise, -1e9)
@@ -49,7 +53,14 @@ def _forward_step(
     
     # Check if next_state is already in tree
     equals = jax.vmap(state_equal_fn, in_axes=(0, None))(t_states, next_state)
-    matches = equals & t_valid
+    
+    if merge_mode == "pure_tree":
+        matches = jnp.zeros_like(t_valid)
+    elif merge_mode == "depth_dependent":
+        matches = equals & t_valid & (t_depths == (step_idx + 1))
+    else: # depth_independent
+        matches = equals & t_valid
+        
     found = jnp.any(matches)
     found_idx = jnp.argmax(matches)
     
@@ -61,6 +72,7 @@ def _forward_step(
     
     # Update tree arrays on expansion
     new_t_valid = t_valid.at[v].set(jnp.where(should_expand, True, t_valid[v]))
+    new_t_depths = t_depths.at[v].set(jnp.where(should_expand, step_idx + 1, t_depths[v]))
     
     # Avoid lax.cond to prevent lambda re-creation / trace cache misses
     new_t_states = jax.tree.map(
@@ -87,7 +99,7 @@ def _forward_step(
     
     next_f_carry = (
         next_u, next_carry_state, next_carry_obs, key, new_expanded, is_done | (take_step & done),
-        new_next_empty_idx, new_t_states, new_t_valid, t_V, t_T_s, t_Q, t_T_sa,
+        new_next_empty_idx, new_t_states, new_t_valid, new_t_depths, t_V, t_T_s, t_Q, t_T_sa,
         new_expanded_state, new_expanded_obs
     )
     return next_f_carry, step_info
@@ -123,20 +135,20 @@ def _simulation_step(
     state, obs, max_depth, rollout_fn,
     forward_step_fn, backward_step_fn
 ):
-    tree_states, tree_valid, tree_V, tree_T_s, tree_Q, tree_T_sa, tree_next_empty_idx, sim_key = carry
+    tree_states, tree_valid, tree_depths, tree_V, tree_T_s, tree_Q, tree_T_sa, tree_next_empty_idx, sim_key = carry
     
     # 1. Forward Pass (Selection & Expansion)
     init_f_carry = (
         0, state, obs, sim_key, False, False, tree_next_empty_idx,
-        tree_states, tree_valid, tree_V, tree_T_s, tree_Q, tree_T_sa,
+        tree_states, tree_valid, tree_depths, tree_V, tree_T_s, tree_Q, tree_T_sa,
         state, obs
     )
     
-    final_f_carry, trajectory = jax.lax.scan(forward_step_fn, init_f_carry, None, length=max_depth)
+    final_f_carry, trajectory = jax.lax.scan(forward_step_fn, init_f_carry, jnp.arange(max_depth))
     
     (
         _, _, _, post_key, _, _, new_next_empty_idx,
-        new_states, new_valid, new_V, _, _, _,
+        new_states, new_valid, new_depths, new_V, _, _, _,
         final_expanded_state, final_expanded_obs
     ) = final_f_carry
     
@@ -169,7 +181,7 @@ def _simulation_step(
     final_V, final_T_s, final_Q, final_T_sa = final_b_carry
     
     next_carry = (
-        new_states, new_valid, final_V, final_T_s, final_Q, final_T_sa, new_next_empty_idx, post_key
+        new_states, new_valid, new_depths, final_V, final_T_s, final_Q, final_T_sa, new_next_empty_idx, post_key
     )
     return next_carry, None
 
@@ -188,16 +200,29 @@ def jax_spuct_search(
     gamma=0.99,
     c=1.414,
     p=1.0,
-    rollout_depth=0
+    rollout_depth=500,
+    merge_mode="depth_independent",
+    horizon_mode="fixed",
+    ucb_mode="spuct"
 ):
     """
     JAX-native Stochastic Power UCT (SP-UCT) solver.
     """
+    if horizon_mode == "adaptive":
+        import math
+        if gamma >= 1.0:
+            max_depth = 10
+        else:
+            max_depth = int(math.ceil(math.log(num_simulations) / (2.0 * math.log(1.0 / gamma))))
+    elif horizon_mode == "infinite":
+        max_depth = 500
+
     max_nodes = num_simulations + 2
 
     # Initialize tree structures
     states = jax.tree.map(lambda x: jnp.broadcast_to(x, (max_nodes,) + x.shape), state)
     state_valid = jnp.zeros(max_nodes, dtype=jnp.bool_).at[0].set(True)
+    state_depths = jnp.zeros(max_nodes, dtype=jnp.int32)
     
     # Initialize rollout for root
     root_mask = action_mask_fn(obs)
@@ -227,7 +252,9 @@ def jax_spuct_search(
         env_step=env_step,
         state_equal_fn=state_equal_fn,
         c=c,
-        num_actions=num_actions
+        num_actions=num_actions,
+        merge_mode=merge_mode,
+        ucb_mode=ucb_mode
     )
     
     backward_step_fn = partial(
@@ -255,14 +282,14 @@ def jax_spuct_search(
     
     next_empty_idx = 1
     
-    init_carry = (states, state_valid, V, T_s, Q, T_sa, next_empty_idx, key)
+    init_carry = (states, state_valid, state_depths, V, T_s, Q, T_sa, next_empty_idx, key)
     final_carry, _ = jax.lax.scan(simulation_step_fn, init_carry, None, length=num_simulations)
     
     # Select greedy action from root node (index 0) with tie-breaking noise
-    final_Q_root = final_carry[4][0]
+    final_Q_root = final_carry[5][0]
     mask = action_mask_fn(obs)
     
-    key, tie_key = jax.random.split(final_carry[7])
+    key, tie_key = jax.random.split(final_carry[8])
     noise = jax.random.uniform(tie_key, shape=final_Q_root.shape) * 1e-6
     final_Q_root = jnp.where(mask, final_Q_root + noise, -1e9)
     action = jnp.argmax(final_Q_root)

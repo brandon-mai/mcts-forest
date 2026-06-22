@@ -100,6 +100,18 @@ uv run benchmax --env 2048 --solver spuct --sims 100 --seeds 1000
 
 # Gymnax Four Rooms
 uv run benchmax --env fourrooms --solver spuct --sims 100 --seeds 1000
+
+# UCT
+uv run benchmax --env fourrooms --solver spuct --sims 100 --seeds 5 --solver_args "{'merge_mode': 'pure_tree', 'horizon_mode': 'infinite', 'ucb_mode': 'standard', 'p': 1.0, 'gamma': 0.95}"
+
+# SPUCT
+uv run benchmax --env fourrooms --solver spuct --sims 100 --seeds 5 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 10, 'horizon_mode': 'fixed', 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}"
+
+# GSPUCT
+uv run benchmax --env fourrooms --solver spuct --sims 100 --seeds 5 --solver_args "{'merge_mode': 'depth_dependent', 'max_depth': 10, 'horizon_mode': 'fixed', 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}"
+
+# GSPUCTF
+uv run benchmax --env fourrooms --solver spuct --sims 100 --seeds 5 --solver_args "{'merge_mode': 'depth_independent', 'horizon_mode': 'adaptive', 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}"
 ```
 
 ## Visualization & Analysis
