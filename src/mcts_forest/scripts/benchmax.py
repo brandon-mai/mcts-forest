@@ -14,6 +14,11 @@ import jax.numpy as jnp
 import gymnax
 import jumanji
 
+jax.config.update("jax_log_compiles", True)
+jax.config.update("jax_explain_cache_misses", True)
+jax.config.update("jax_dump_ir_to", "jax_ir")
+jax.config.update("jax_dump_ir_modes", "eqn_count_pprof")
+
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
