@@ -31,9 +31,9 @@ gymnax = { git = "https://github.com/RobertTLange/gymnax.git", rev = "main" }
 jumanji = { git = "https://github.com/instadeepai/jumanji.git" }
 
 [project.scripts]
-benchmark = "mcts_forest.scripts.benchmark:main"
-benchmax = "mcts_forest.scripts.benchmax:main"
+benchmark = "mcts_forest.scripts.jax_benchmark:main"
 remote = "mcts_forest.scripts.remote_kaggle:main"
+train = "mcts_forest.scripts.train:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

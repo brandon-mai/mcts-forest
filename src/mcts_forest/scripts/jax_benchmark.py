@@ -14,10 +14,10 @@ import jax.numpy as jnp
 import gymnax
 import jumanji
 
-jax.config.update("jax_log_compiles", True)
-jax.config.update("jax_explain_cache_misses", True)
-jax.config.update("jax_dump_ir_to", "jax_ir")
-jax.config.update("jax_dump_ir_modes", "eqn_count_pprof")
+# jax.config.update("jax_log_compiles", True)
+# jax.config.update("jax_explain_cache_misses", True)
+# jax.config.update("jax_dump_ir_to", "jax_ir")
+# jax.config.update("jax_dump_ir_modes", "eqn_count_pprof")
 
 from rich.console import Console
 from rich.table import Table
@@ -30,6 +30,7 @@ from mcts_forest.utils.stats import bootstrap_stats
 from mcts_forest.utils.experiment import parse_dict
 from mcts_forest.core.jax_random import jax_random_search
 from mcts_forest.core.jax_spuct import jax_spuct_search
+from mcts_forest.core.jax_mctxf import jax_mctx_search
 
 console = Console()
 
@@ -173,7 +174,7 @@ def main():
             continue
             
         for solver_name in solvers:
-            if solver_name.lower() not in ["random", "spuct"]:
+            if solver_name.lower() not in ["random", "spuct", "mctx"]:
                 console.print(f"[bold red]Unsupported solver: {solver_name}[/bold red]")
                 continue
                 
@@ -187,6 +188,18 @@ def main():
                         reward_norm_fn=reward_norm_fn,
                         state_equal_fn=state_equal_fn,
                         num_actions=num_actions
+                    )
+                elif solver_name.lower() == "mctx":
+                    solver_fn = partial(
+                        jax_mctx_search,
+                        env_step=step_fn,
+                        env_reset=reset_fn,
+                        action_mask_fn=action_mask_fn,
+                        reward_norm_fn=reward_norm_fn,
+                        state_equal_fn=state_equal_fn,
+                        num_actions=num_actions,
+                        num_simulations=sims,
+                        **solver_kwargs
                     )
                 else:
                     solver_fn = partial(
