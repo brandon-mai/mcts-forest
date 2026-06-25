@@ -22,7 +22,7 @@ import jumanji
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn, TimeRemainingColumn, TimeElapsedColumn
 from rich import box
 from rich.rule import Rule
 
@@ -161,80 +161,122 @@ def main():
     num_seeds = args.seeds * args.episodes
     max_steps = 500
     
-    console.print(f"[bold cyan]Starting benchmax with batch size {num_seeds}...[/bold cyan]")
-    
+    # 1. Pre-generate combinations
+    all_experiments = []
     for env_name in envs:
-        # Load environment fns
-        if "fourrooms" in env_name.lower():
-            reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions = make_gymnax_fns("FourRooms-misc")
-            env_disp = "fourrooms"
-        elif "2048" in env_name.lower():
-            reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions = make_jumanji_fns("Game2048-v1")
-            env_disp = "2048"
-        else:
-            console.print(f"[bold red]Unsupported environment: {env_name}[/bold red]")
+        if "fourrooms" not in env_name.lower() and "2048" not in env_name.lower():
             continue
-            
         for solver_name in solvers:
             if solver_name.lower() not in ["random", "spuct", "mctx"]:
-                console.print(f"[bold red]Unsupported solver: {solver_name}[/bold red]")
                 continue
-                
             for sims in sims_list:
-                if solver_name.lower() == "random":
-                    def solver_fn(k, o, s):
-                        act = jax_random_search(k, o, s, step_fn, reset_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions)
-                        return act, 0.0
-                elif solver_name.lower() == "mctx":
-                    def solver_fn(k, o, s):
-                        act, node_count = jax_mctx_search(k, o, s, step_fn, reset_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_simulations=sims, return_node_count=True, **solver_kwargs)
-                        return act, node_count
-                else:
-                    def solver_fn(k, o, s):
-                        act = jax_spuct_search(k, o, s, step_fn, reset_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_simulations=sims, **solver_kwargs)
-                        return act, float(sims + 2)
-                    
-                with console.status(f"[bold blue]Compiling JAX graph for {env_disp}...[/bold blue]"):
-                    # Warmup run to compile
-                    warmup_key = jax.random.PRNGKey(0)
-                    _ = run_episodes_jax(warmup_key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_seeds, max_steps)
-                
-                with console.status(f"[bold green]Running {num_seeds} vectorized episodes on device...[/bold green]"):
-                    key = jax.random.PRNGKey(42)
-                    t0 = time.time()
-                    rewards, steps, success, node_counts = run_episodes_jax(
-                        key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_seeds, max_steps
-                    )
-                    # Block to sync device
-                    steps.block_until_ready()
-                    elapsed = time.time() - t0
-                
-                # Retrieve arrays to host
-                rewards_np = np.array(rewards)
-                steps_np = np.array(steps)
-                success_np = np.array(success).astype(np.int32)
-                node_counts_np = np.array(node_counts)
-                
-                success_mean, success_bs_std = bootstrap_stats(success_np, n_resamples=2000)
-                reward_mean, reward_bs_std = bootstrap_stats(rewards_np, n_resamples=2000)
-                avg_steps = steps_np.mean()
-                total_steps = int(np.sum(steps_np))
-                avg_time = elapsed / total_steps if total_steps > 0 else 0.0
-                avg_nodes = np.mean(node_counts_np / np.maximum(steps_np, 1))
-                
-                final_results_summary.append({
-                    "Solver": solver_name,
-                    "DisplaySolver": solver_name,
-                    "Env": env_disp,
-                    "Sims": sims,
-                    "Kwargs": str(solver_kwargs) if solver_kwargs else "-",
-                    "Success": f"{success_mean*100:.2f}% ± {success_bs_std*100:.2f}%",
-                    "Reward": f"{reward_mean:.4f} ± {reward_bs_std:.4f}",
-                    "Steps": f"{avg_steps:.2f}",
-                    "Time/Move": f"{avg_time*1000:.4f}ms",
-                    "Nodes": f"{avg_nodes:.1f}"
+                all_experiments.append({
+                    "env": env_name,
+                    "solver": solver_name,
+                    "sims": sims
                 })
                 
+    if not all_experiments:
+        console.print("[bold red]No compatible experiment combinations found.[/bold red]")
+        return
+
+    # Identify swept keys
+    swept_keys = []
+    if len(envs) > 1: swept_keys.append("env")
+    if len(solvers) > 1: swept_keys.append("solver")
+    if len(sims_list) > 1: swept_keys.append("sims")
+
+    console.print(f"[bold cyan]Starting benchmax with batch size {num_seeds}...[/bold cyan]")
+    
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+        refresh_per_second=10
+    ) as progress:
+        
+        overall_task = progress.add_task("[bold cyan]Sweep Progress", total=len(all_experiments))
+        
+        for i, exp in enumerate(all_experiments):
+            env_name, solver_name, sims = exp["env"], exp["solver"], exp["sims"]
+            
+            label_parts = []
+            for k in swept_keys:
+                v = exp.get(k)
+                if v is not None:
+                    label_parts.append(f"{k}={v}")
+            current_label = " ".join(label_parts) or "Default"
+            
+            progress.update(overall_task, description=f"[bold cyan]Grid: {current_label} ({i+1}/{len(all_experiments)})")
+            
+            # Load environment fns
+            if "fourrooms" in env_name.lower():
+                reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions = make_gymnax_fns("FourRooms-misc")
+                env_disp = "fourrooms"
+            else:
+                reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions = make_jumanji_fns("Game2048-v1")
+                env_disp = "2048"
+                
+            if solver_name.lower() == "random":
+                def solver_fn(k, o, s):
+                    act = jax_random_search(k, o, s, step_fn, reset_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions)
+                    return act, 0.0
+            elif solver_name.lower() == "mctx":
+                def solver_fn(k, o, s):
+                    act, node_count = jax_mctx_search(k, o, s, step_fn, reset_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_simulations=sims, return_node_count=True, **solver_kwargs)
+                    return act, node_count
+            else:
+                def solver_fn(k, o, s):
+                    act = jax_spuct_search(k, o, s, step_fn, reset_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_simulations=sims, **solver_kwargs)
+                    return act, float(sims + 2)
+                
+            with progress.console.status(f"[bold blue]Compiling JAX graph for {env_disp}...[/bold blue]"):
+                # Warmup run to compile
+                warmup_key = jax.random.PRNGKey(0)
+                _ = run_episodes_jax(warmup_key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_seeds, max_steps)
+            
+            with progress.console.status(f"[bold green]Running {num_seeds} vectorized episodes on device...[/bold green]"):
+                key = jax.random.PRNGKey(42)
+                t0 = time.time()
+                rewards, steps, success, node_counts = run_episodes_jax(
+                    key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_seeds, max_steps
+                )
+                # Block to sync device
+                steps.block_until_ready()
+                elapsed = time.time() - t0
+            
+            # Retrieve arrays to host
+            rewards_np = np.array(rewards)
+            steps_np = np.array(steps)
+            success_np = np.array(success).astype(np.int32)
+            node_counts_np = np.array(node_counts)
+            
+            success_mean, success_bs_std = bootstrap_stats(success_np, n_resamples=2000)
+            reward_mean, reward_bs_std = bootstrap_stats(rewards_np, n_resamples=2000)
+            avg_steps = steps_np.mean()
+            total_steps = int(np.sum(steps_np))
+            avg_time = elapsed / total_steps if total_steps > 0 else 0.0
+            avg_nodes = np.mean(node_counts_np / np.maximum(steps_np, 1))
+            
+            final_results_summary.append({
+                "Solver": solver_name,
+                "DisplaySolver": solver_name,
+                "Env": env_disp,
+                "Sims": sims,
+                "Kwargs": str(solver_kwargs) if solver_kwargs else "-",
+                "Success": f"{success_mean*100:.2f}% ± {success_bs_std*100:.2f}%",
+                "Reward": f"{reward_mean:.4f} ± {reward_bs_std:.4f}",
+                "Steps": f"{avg_steps:.2f}",
+                "Time/Move": f"{avg_time*1000:.4f}ms",
+                "Nodes": f"{avg_nodes:.1f}"
+            })
+            
+            progress.advance(overall_task)
+            
     console.print("\n", Rule("benchmax Vectorized Summary", style="bold cyan"))
     table = Table(box=box.MINIMAL_DOUBLE_HEAD, show_header=True, header_style="bold magenta")
     table.add_column("Solver", justify="left")
@@ -264,25 +306,13 @@ def main():
     console.print(table)
     
     if args.table:
-        unique_display_solvers = sorted(list(set(res["DisplaySolver"] for res in final_results_summary)))
-        sims_list = sorted(list(set(res["Sims"] for res in final_results_summary)))
-        
-        md_lines = []
-        header = "| | " + " | ".join(str(s) for s in sims_list) + " |"
-        separator = "| --- | " + " | ".join("---" for _ in sims_list) + " |"
-        md_lines.append(header)
-        md_lines.append(separator)
-        
-        for ds in unique_display_solvers:
-            row_parts = [ds]
-            for s in sims_list:
-                match = next((res for res in final_results_summary if res["DisplaySolver"] == ds and res["Sims"] == s), None)
-                if match:
-                    cell = f"{match['Success']}<br>**{match['Reward']}**"
-                    row_parts.append(cell)
-                else:
-                    row_parts.append("")
-            md_lines.append("| " + " | ".join(row_parts) + " |")
+        md_lines = [
+            "| Solver | Env | Sims | Solver Args | Success Rate | Mean Reward | Steps | Time/Move | Avg Nodes |",
+            "| :--- | :--- | ---: | :--- | ---: | ---: | ---: | ---: | ---: |"
+        ]
+        for res in final_results_summary:
+            row = f"| {res['DisplaySolver']} | {res['Env']} | {res['Sims']} | {res['Kwargs']} | {res['Success']} | {res['Reward']} | {res['Steps']} | {res['Time/Move']} | {res['Nodes']} |"
+            md_lines.append(row)
             
         with open("result_table.txt", "w", encoding="utf-8") as f:
             f.write("\n".join(md_lines))
