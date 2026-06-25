@@ -634,6 +634,7 @@ def jax_mctx_search(
     merge_mode: str = "depth_dependent",
     p: Any = 1.0,
     return_weights: bool = False,
+    return_node_count: bool = False,
 ):
     """
     Unified MCTS Engine.
@@ -764,4 +765,7 @@ def jax_mctx_search(
 
     if return_weights:
         return policy_output.action[0], policy_output.action_weights[0]
+    if return_node_count:
+        visited = jnp.sum(policy_output.search_tree.node_visits[0] > 0)
+        return policy_output.action[0], visited
     return policy_output.action[0]

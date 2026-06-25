@@ -84,11 +84,12 @@ def run_episodes_jax(key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_n
     total_rewards = jnp.zeros(num_seeds, dtype=jnp.float32)
     episode_steps = jnp.zeros(num_seeds, dtype=jnp.int32)
     success_mask = jnp.zeros(num_seeds, dtype=jnp.bool_)
+    total_node_counts = jnp.zeros(num_seeds, dtype=jnp.float32)
     
-    carry = (states, obss, loop_key, active_mask, total_rewards, episode_steps, success_mask)
+    carry = (states, obss, loop_key, active_mask, total_rewards, episode_steps, success_mask, total_node_counts)
     
     def scan_body(carry, _):
-        states, obss, key, active_mask, total_rewards, episode_steps, success_mask = carry
+        states, obss, key, active_mask, total_rewards, episode_steps, success_mask, total_node_counts = carry
         
         # Split key for parallel search and step keys
         key, step_key = jax.random.split(key)
@@ -96,8 +97,8 @@ def run_episodes_jax(key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_n
         search_keys = subkeys[:num_seeds]
         env_keys = subkeys[num_seeds:]
         
-        # Parallel solver search - pass only key, obs, state
-        actions = jax.vmap(solver_fn, in_axes=(0, 0, 0))(
+        # Parallel solver search - returns action and node_count
+        actions, node_counts = jax.vmap(solver_fn, in_axes=(0, 0, 0))(
             search_keys, obss, states
         )
         
@@ -109,14 +110,15 @@ def run_episodes_jax(key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_n
         new_episode_steps = episode_steps + active_mask.astype(jnp.int32)
         new_success_mask = success_mask | (active_mask & dones & (rewards > 0.0))
         new_active_mask = active_mask & ~dones
+        new_total_node_counts = total_node_counts + node_counts * active_mask
         
-        next_carry = (next_states, next_obss, key, new_active_mask, new_total_rewards, new_episode_steps, new_success_mask)
+        next_carry = (next_states, next_obss, key, new_active_mask, new_total_rewards, new_episode_steps, new_success_mask, new_total_node_counts)
         return next_carry, None
 
     final_carry, _ = jax.lax.scan(scan_body, carry, xs=None, length=max_steps)
-    _, _, _, _, final_rewards, final_steps, final_success = final_carry
+    _, _, _, _, final_rewards, final_steps, final_success, final_node_counts = final_carry
     
-    return final_rewards, final_steps, final_success
+    return final_rewards, final_steps, final_success, final_node_counts
 
 def parse_grid_item(value: Any) -> List[Any]:
     if isinstance(value, str):
@@ -180,39 +182,17 @@ def main():
                 
             for sims in sims_list:
                 if solver_name.lower() == "random":
-                    solver_fn = partial(
-                        jax_random_search,
-                        env_step=step_fn,
-                        env_reset=reset_fn,
-                        action_mask_fn=action_mask_fn,
-                        reward_norm_fn=reward_norm_fn,
-                        state_equal_fn=state_equal_fn,
-                        num_actions=num_actions
-                    )
+                    def solver_fn(k, o, s):
+                        act = jax_random_search(k, o, s, step_fn, reset_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions)
+                        return act, 0.0
                 elif solver_name.lower() == "mctx":
-                    solver_fn = partial(
-                        jax_mctx_search,
-                        env_step=step_fn,
-                        env_reset=reset_fn,
-                        action_mask_fn=action_mask_fn,
-                        reward_norm_fn=reward_norm_fn,
-                        state_equal_fn=state_equal_fn,
-                        num_actions=num_actions,
-                        num_simulations=sims,
-                        **solver_kwargs
-                    )
+                    def solver_fn(k, o, s):
+                        act, node_count = jax_mctx_search(k, o, s, step_fn, reset_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_simulations=sims, return_node_count=True, **solver_kwargs)
+                        return act, node_count
                 else:
-                    solver_fn = partial(
-                        jax_spuct_search,
-                        env_step=step_fn,
-                        env_reset=reset_fn,
-                        action_mask_fn=action_mask_fn,
-                        reward_norm_fn=reward_norm_fn,
-                        state_equal_fn=state_equal_fn,
-                        num_actions=num_actions,
-                        num_simulations=sims,
-                        **solver_kwargs
-                    )
+                    def solver_fn(k, o, s):
+                        act = jax_spuct_search(k, o, s, step_fn, reset_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_simulations=sims, **solver_kwargs)
+                        return act, float(sims + 2)
                     
                 with console.status(f"[bold blue]Compiling JAX graph for {env_disp}...[/bold blue]"):
                     # Warmup run to compile
@@ -222,7 +202,7 @@ def main():
                 with console.status(f"[bold green]Running {num_seeds} vectorized episodes on device...[/bold green]"):
                     key = jax.random.PRNGKey(42)
                     t0 = time.time()
-                    rewards, steps, success = run_episodes_jax(
+                    rewards, steps, success, node_counts = run_episodes_jax(
                         key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_seeds, max_steps
                     )
                     # Block to sync device
@@ -233,12 +213,14 @@ def main():
                 rewards_np = np.array(rewards)
                 steps_np = np.array(steps)
                 success_np = np.array(success).astype(np.int32)
+                node_counts_np = np.array(node_counts)
                 
                 success_mean, success_bs_std = bootstrap_stats(success_np, n_resamples=2000)
                 reward_mean, reward_bs_std = bootstrap_stats(rewards_np, n_resamples=2000)
                 avg_steps = steps_np.mean()
                 total_steps = int(np.sum(steps_np))
                 avg_time = elapsed / total_steps if total_steps > 0 else 0.0
+                avg_nodes = np.mean(node_counts_np / np.maximum(steps_np, 1))
                 
                 final_results_summary.append({
                     "Solver": solver_name,
@@ -249,7 +231,8 @@ def main():
                     "Success": f"{success_mean*100:.2f}% ± {success_bs_std*100:.2f}%",
                     "Reward": f"{reward_mean:.4f} ± {reward_bs_std:.4f}",
                     "Steps": f"{avg_steps:.2f}",
-                    "Time/Move": f"{avg_time*1000:.4f}ms"
+                    "Time/Move": f"{avg_time*1000:.4f}ms",
+                    "Nodes": f"{avg_nodes:.1f}"
                 })
                 
     console.print("\n", Rule("benchmax Vectorized Summary", style="bold cyan"))
@@ -262,6 +245,7 @@ def main():
     table.add_column("Mean Reward", justify="right", no_wrap=True)
     table.add_column("Steps", justify="right")
     table.add_column("Time/Move", justify="right")
+    table.add_column("Avg Nodes", justify="right")
     
     for res in final_results_summary:
         color = "green" if "100.00%" in res["Success"] else "yellow" if "0.00%" not in res["Success"] else "red"
@@ -273,7 +257,8 @@ def main():
             f"[{color}]{res['Success']}[/{color}]",
             res["Reward"],
             res["Steps"],
-            res["Time/Move"]
+            res["Time/Move"],
+            res["Nodes"]
         )
         
     console.print(table)
