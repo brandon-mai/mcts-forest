@@ -282,7 +282,11 @@ def _simulate_single(rng_key, tree, action_selection_fn, max_depth):
     node_index, is_continuing, key = carry
     
     key, selection_key = jax.random.split(key)
-    action = action_selection_fn(selection_key, tree, node_index, step_idx)
+    action = jax.lax.cond(
+        is_continuing,
+        lambda: action_selection_fn(selection_key, tree, node_index, step_idx),
+        lambda: jnp.zeros((), dtype=jnp.int32)
+    )
     next_node_index = tree.children_index[node_index, action]
     
     step_info = (node_index, action, is_continuing)
@@ -472,7 +476,7 @@ def search_custom(
     
     # 1. Simulate and record trajectory
     parent_index, action, trajectory_parents, trajectory_actions, trajectory_active = simulate(
-        simulate_keys, tree, action_selection_fn, max_depth
+        simulate_keys, tree, action_selection_fn, 2 * max_depth
     )
     
     # 2. Expand and resolve node indices (with state merging)

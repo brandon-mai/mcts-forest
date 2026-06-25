@@ -102,16 +102,16 @@ uv run benchmark --env 2048 --solver mctx --sims 100 --seeds 1000
 uv run benchmark --env fourrooms --solver mctx --sims 100 --seeds 1000
 
 # UCT
-uv run benchmark --env fourrooms --solver mctx --sims 100 --seeds 5 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 200, 'ucb_mode': 'standard', 'p': 1.0, 'gamma': 0.95}"
+uv run benchmark --env fourrooms --solver mctx --sims 100 --seeds 5 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 10, 'ucb_mode': 'standard', 'p': 1.0, 'gamma': 0.95}"
 
 # SPUCT
-uv run benchmark --env fourrooms --solver mctx --sims 100 --seeds 5 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 10, 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}"
+uv run benchmark --env fourrooms --solver mctx --sims 100 --seeds 5 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}"
 
 # GSPUCT
-uv run benchmark --env fourrooms --solver mctx --sims 100 --seeds 5 --solver_args "{'merge_mode': 'depth_dependent', 'max_depth': 10, 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}"
+uv run benchmark --env fourrooms --solver mctx --sims 100 --seeds 5 --solver_args "{'merge_mode': 'depth_dependent', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}"
 
 # GSPUCTF
-uv run benchmark --env fourrooms --solver mctx --sims 100 --seeds 5 --solver_args "{'merge_mode': 'depth_independent', 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}"
+uv run benchmark --env fourrooms --solver mctx --sims 100 --seeds 5 --solver_args "{'merge_mode': 'depth_independent', 'max_depth': 10, 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}"
 ```
 
 ### AlphaZero Training
