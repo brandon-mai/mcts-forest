@@ -637,6 +637,7 @@ def jax_mctx_search(
     ucb_mode: str = "spuct",
     merge_mode: str = "depth_dependent",
     p: Any = 1.0,
+    c: Any = 1.25,
     return_weights: bool = False,
     return_node_count: bool = False,
 ):
@@ -729,7 +730,7 @@ def jax_mctx_search(
             state_value = jnp.where(done, 0.0, state_value)
             
             return (next_s, next_o), policy_logits, state_value, norm_reward, discount
-
+ 
         batch_size = chance_outcome.shape[0]
         keys = jax.random.split(rng_key, batch_size)
         vmapped_fn = jax.vmap(single_step, in_axes=(0, 0, 0, 0, 0))
@@ -764,7 +765,8 @@ def jax_mctx_search(
         qtransform=mctx.qtransform_by_parent_and_siblings,
         ucb_mode=ucb_mode,
         merge_mode=merge_mode,
-        p=p
+        p=p,
+        pb_c_init=c
     )
 
     if return_weights:

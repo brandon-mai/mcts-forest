@@ -81,7 +81,7 @@ def compute_returns(rewards: jnp.ndarray, discounts: jnp.ndarray, final_value: j
     _, values = jax.lax.scan(d_step, final_value, (rewards, discounts), reverse=True)
     return values
 
-@partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16))
+@partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17))
 def self_play_episode_batch(
     key: jax.Array,
     nn_params: Any,
@@ -99,7 +99,8 @@ def self_play_episode_batch(
     gamma: float,
     ucb_mode: str = "spuct",
     merge_mode: str = "depth_dependent",
-    p: Any = 1.0
+    p: Any = 1.0,
+    c: Any = 1.25
 ) -> Dict[str, Any]:
     init_key, loop_key = jax.random.split(key)
     seed_keys = jax.random.split(init_key, num_parallel)
@@ -134,7 +135,8 @@ def self_play_episode_batch(
                 return_weights=True,
                 ucb_mode=ucb_mode,
                 merge_mode=merge_mode,
-                p=p
+                p=p,
+                c=c
             ),
             in_axes=(0, 0, 0)
         )

@@ -130,7 +130,7 @@ To obtain high-quality trained networks, use the following serious training comm
 uv run train --env fourrooms --sims 128 --parallel_envs 32 --max_steps 50000 --batch_size 128 --buffer_size 50000 --learning_rate 5e-4 --save_freq 1000 --checkpoint_dir "results/uct_checkpoints" --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'standard', 'p': 1.0}"
 
 # 2. Train using GSPUCT (New MCTS: depth-dependent state merging, SP-UCT UCB, limited horizon)
-uv run train --env fourrooms --sims 128 --parallel_envs 32 --max_steps 50000 --batch_size 128 --buffer_size 50000 --learning_rate 5e-4 --save_freq 1000 --checkpoint_dir "results/gspuct_checkpoints" --solver_args "{'merge_mode': 'depth_dependent', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.0}"
+uv run train --env fourrooms --sims 128 --parallel_envs 32 --max_steps 50000 --batch_size 128 --buffer_size 50000 --learning_rate 5e-4 --save_freq 1000 --checkpoint_dir "results/gspuct_checkpoints" --solver_args "{'merge_mode': 'depth_independent', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.0}"
 ```
 
 #### Training Arguments

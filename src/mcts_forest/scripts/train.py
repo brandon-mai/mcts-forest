@@ -58,11 +58,11 @@ def main():
     if args.env == "fourrooms":
         reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions = make_gymnax_fns("FourRooms-misc")
         model = FourRoomsNet(num_actions=num_actions)
-        max_episode_steps = 100
+        max_episode_steps = 250
     else:
         reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions = make_jumanji_fns("Game2048-v1")
         model = Game2048Net(num_actions=num_actions)
-        max_episode_steps = 150
+        max_episode_steps = 500
 
     # Initialize model variables
     key = jax.random.PRNGKey(0)
