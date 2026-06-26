@@ -1,9 +1,20 @@
 import argparse
 import time
 import os
+import sys
+
+# Configure XLA flags before importing JAX to optimize RTX 5090 / compilation
+xla_flags = os.environ.get("XLA_FLAGS", "")
+opt_flags = (
+    "--xla_gpu_force_compilation_parallelism=32 "
+    "--xla_gpu_enable_triton_gemm=true "
+    "--xla_gpu_enable_latency_hiding_scheduler=true "
+    "--xla_gpu_enable_highest_priority_async_stream=true"
+)
+os.environ["XLA_FLAGS"] = f"{xla_flags} {opt_flags}".strip()
+
 import numpy as np
 import pandas as pd
-import sys
 import ast
 import itertools
 from typing import List, Dict, Any, Tuple
@@ -234,24 +245,42 @@ def main():
                     act = jax_spuct_search(k, o, s, step_fn, reset_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_simulations=sims, **solver_kwargs)
                     return act, float(sims + 2)
                 
+            t_compile_start = time.time()
+            aot_success = False
+            compiled_fn = None
             with progress.console.status(f"[bold blue]Compiling JAX graph for {env_disp}...[/bold blue]"):
                 # Warmup run to compile
                 warmup_key = jax.random.PRNGKey(0)
-                _ = run_episodes_jax(
-                    warmup_key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_norm_fn, 
-                    state_equal_fn, num_actions, num_seeds, max_steps
-                )
+                try:
+                    compiled_fn = run_episodes_jax.lower(
+                        warmup_key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_norm_fn, 
+                        state_equal_fn, num_actions, num_seeds, max_steps
+                    ).compile()
+                    aot_success = True
+                except Exception as e:
+                    progress.console.print(f"[bold red]AOT Compilation failed, falling back to standard JIT: {e}[/bold red]")
+                    # Standard warmup run to compile
+                    warmup_res = run_episodes_jax(
+                        warmup_key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_norm_fn, 
+                        state_equal_fn, num_actions, num_seeds, max_steps
+                    )
+                    jax.block_until_ready(warmup_res)
+            compile_elapsed = time.time() - t_compile_start
             
             with progress.console.status(f"[bold green]Running {num_seeds} vectorized episodes on device...[/bold green]"):
                 key = jax.random.PRNGKey(42)
                 t0 = time.time()
-                rewards, steps, success, node_counts = run_episodes_jax(
-                    key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_norm_fn,
-                    state_equal_fn, num_actions, num_seeds, max_steps
-                )
+                if aot_success and compiled_fn is not None:
+                    rewards, steps, success, node_counts = compiled_fn(key)
+                else:
+                    rewards, steps, success, node_counts = run_episodes_jax(
+                        key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_norm_fn,
+                        state_equal_fn, num_actions, num_seeds, max_steps
+                    )
                 # Block to sync device
                 steps.block_until_ready()
                 elapsed = time.time() - t0
+            progress.console.print(f"[bold yellow]Profile info:[/bold yellow] AOT Successful: {aot_success}, Compile/Warmup Time: {compile_elapsed:.4f}s, Pure Execution Time: {elapsed:.4f}s")
             
             # Retrieve arrays to host
             rewards_np = np.array(rewards)

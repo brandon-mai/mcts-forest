@@ -102,16 +102,19 @@ uv run benchmark --env 2048 --solver mctx --sims 100 --seeds 1000
 uv run benchmark --env fourrooms --solver mctx --sims 100 --seeds 1000
 
 # UCT
-uv run benchmark --env fourrooms --solver mctx --sims "(16, 32, 64, 128)" --seeds 1000 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 10, 'ucb_mode': 'standard', 'p': 1.0, 'gamma': 0.95}" --table
+uv run benchmark --env fourrooms --solver mctx --sims "(16, 32, 64, 128, 256, 512, 1024, 2048)" --seeds 1000 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'standard', 'p': 1.0, 'gamma': 0.95}" --table
 
 # SPUCT
-uv run benchmark --env fourrooms --solver mctx --sims "(16, 32, 64, 128)" --seeds 1000 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}" --table
+uv run benchmark --env fourrooms --solver mctx --sims "(16, 32, 64, 128, 256, 512, 1024, 2048)" --seeds 1000 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 2.0, 'gamma': 0.95}" --table
 
 # GSPUCT
 uv run benchmark --env fourrooms --solver mctx --sims "(16, 32, 64, 128)" --seeds 1000 --solver_args "{'merge_mode': 'depth_dependent', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}" --table
 
 # GSPUCTF
-uv run benchmark --env fourrooms --solver mctx --sims "(16, 32, 64, 128)" --seeds 1000 --solver_args "{'merge_mode': 'depth_independent', 'max_depth': 10, 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}" --table
+uv run benchmark --env fourrooms --solver mctx --sims "(16, 32, 64, 128)" --seeds 1000 --solver_args "{'merge_mode': 'depth_independent', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}" --table
+
+# ULTIMATE FOUR ROOMS
+uv run benchmark --env fourrooms --solver mctx --sims "(16, 32, 64, 128, 256, 512, 1024, 2048)" --seeds 1000 --solver_args "{'merge_mode': ('depth_dependent', 'depth_independent'), 'max_depth': 3, 'ucb_mode': 'spuct', 'p': (1.0, 2.0), 'gamma': 0.95}" --table
 ```
 
 ### AlphaZero Training
@@ -124,10 +127,10 @@ To obtain high-quality trained networks, use the following serious training comm
 
 ```bash
 # 1. Train using UCT (Old MCTS: no state merging, standard UCB, infinite horizon)
-uv run train --env 2048 --sims 50 --parallel_envs 32 --max_steps 50000 --batch_size 128 --buffer_size 50000 --learning_rate 5e-4 --save_freq 1000 --checkpoint_dir "results/uct_checkpoints" --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 200, 'ucb_mode': 'standard', 'p': 1.0}"
+uv run train --env fourrooms --sims 128 --parallel_envs 32 --max_steps 50000 --batch_size 128 --buffer_size 50000 --learning_rate 5e-4 --save_freq 1000 --checkpoint_dir "results/uct_checkpoints" --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'standard', 'p': 1.0}"
 
 # 2. Train using GSPUCT (New MCTS: depth-dependent state merging, SP-UCT UCB, limited horizon)
-uv run train --env 2048 --sims 50 --parallel_envs 32 --max_steps 50000 --batch_size 128 --buffer_size 50000 --learning_rate 5e-4 --save_freq 1000 --checkpoint_dir "results/gspuct_checkpoints" --solver_args "{'merge_mode': 'depth_dependent', 'max_depth': 10, 'ucb_mode': 'spuct', 'p': 1.0}"
+uv run train --env fourrooms --sims 128 --parallel_envs 32 --max_steps 50000 --batch_size 128 --buffer_size 50000 --learning_rate 5e-4 --save_freq 1000 --checkpoint_dir "results/gspuct_checkpoints" --solver_args "{'merge_mode': 'depth_dependent', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.0}"
 ```
 
 #### Training Arguments
