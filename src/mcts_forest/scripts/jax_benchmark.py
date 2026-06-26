@@ -144,6 +144,23 @@ def parse_grid_item(value: Any) -> List[Any]:
                 return [value]
     return [value]
 
+def expand_params(params: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Expands a dictionary of parameters into all possible combinations."""
+    if not params:
+        return [{}]
+    
+    keys = list(params.keys())
+    expanded_values = []
+    for k in keys:
+        v = params[k]
+        if isinstance(v, (list, tuple)):
+            expanded_values.append(list(v))
+        else:
+            expanded_values.append([v])
+    
+    combinations = list(itertools.product(*expanded_values))
+    return [dict(zip(keys, combo)) for combo in combinations]
+
 def main():
     if sys.platform == "win32":
         import io
@@ -173,6 +190,7 @@ def main():
     max_steps = 500
     
     # 1. Pre-generate combinations
+    expanded_solver_args = expand_params(solver_kwargs)
     all_experiments = []
     for env_name in envs:
         if "fourrooms" not in env_name.lower() and "2048" not in env_name.lower():
@@ -181,11 +199,13 @@ def main():
             if solver_name.lower() not in ["random", "spuct", "mctx"]:
                 continue
             for sims in sims_list:
-                all_experiments.append({
-                    "env": env_name,
-                    "solver": solver_name,
-                    "sims": sims
-                })
+                for s_kwargs in expanded_solver_args:
+                    all_experiments.append({
+                        "env": env_name,
+                        "solver": solver_name,
+                        "sims": sims,
+                        "solver_kwargs": s_kwargs
+                    })
                 
     if not all_experiments:
         console.print("[bold red]No compatible experiment combinations found.[/bold red]")
@@ -196,6 +216,13 @@ def main():
     if len(envs) > 1: swept_keys.append("env")
     if len(solvers) > 1: swept_keys.append("solver")
     if len(sims_list) > 1: swept_keys.append("sims")
+    
+    all_s_kwargs_keys = set()
+    for exp in all_experiments:
+        all_s_kwargs_keys.update(exp["solver_kwargs"].keys())
+    for k in sorted(all_s_kwargs_keys):
+        if len(set(str(exp["solver_kwargs"].get(k)) for exp in all_experiments)) > 1:
+            swept_keys.append(k)
 
     console.print(f"[bold cyan]Starting benchmax with batch size {num_seeds}...[/bold cyan]")
     
@@ -214,10 +241,11 @@ def main():
         
         for i, exp in enumerate(all_experiments):
             env_name, solver_name, sims = exp["env"], exp["solver"], exp["sims"]
+            s_kwargs = exp["solver_kwargs"]
             
             label_parts = []
             for k in swept_keys:
-                v = exp.get(k)
+                v = exp.get(k, s_kwargs.get(k))
                 if v is not None:
                     label_parts.append(f"{k}={v}")
             current_label = " ".join(label_parts) or "Default"
@@ -238,11 +266,11 @@ def main():
                     return act, 0.0
             elif solver_name.lower() == "mctx":
                 def solver_fn(k, o, s):
-                    act, node_count = jax_mctx_search(k, o, s, step_fn, reset_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_simulations=sims, return_node_count=True, **solver_kwargs)
+                    act, node_count = jax_mctx_search(k, o, s, step_fn, reset_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_simulations=sims, return_node_count=True, **s_kwargs)
                     return act, node_count
             else:
                 def solver_fn(k, o, s):
-                    act = jax_spuct_search(k, o, s, step_fn, reset_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_simulations=sims, **solver_kwargs)
+                    act = jax_spuct_search(k, o, s, step_fn, reset_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_simulations=sims, **s_kwargs)
                     return act, float(sims + 2)
                 
             t_compile_start = time.time()
@@ -295,12 +323,16 @@ def main():
             avg_time = elapsed / total_steps if total_steps > 0 else 0.0
             avg_nodes = np.mean(node_counts_np / np.maximum(steps_np, 1))
             
+            display_name = solver_name
+            if 'p' in s_kwargs:
+                display_name += f" (p={s_kwargs['p']})"
+
             final_results_summary.append({
                 "Solver": solver_name,
-                "DisplaySolver": solver_name,
+                "DisplaySolver": display_name,
                 "Env": env_disp,
                 "Sims": sims,
-                "Kwargs": str(solver_kwargs) if solver_kwargs else "-",
+                "Kwargs": str(s_kwargs) if s_kwargs else "-",
                 "Success": f"{success_mean*100:.2f}% ± {success_bs_std*100:.2f}%",
                 "Reward": f"{reward_mean:.4f} ± {reward_bs_std:.4f}",
                 "Steps": f"{avg_steps:.2f}",
