@@ -226,3 +226,4 @@ wandb/
 test*
 *config.json
 .agents/
+jax_ir/

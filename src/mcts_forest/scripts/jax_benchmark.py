@@ -237,13 +237,17 @@ def main():
             with progress.console.status(f"[bold blue]Compiling JAX graph for {env_disp}...[/bold blue]"):
                 # Warmup run to compile
                 warmup_key = jax.random.PRNGKey(0)
-                _ = run_episodes_jax(warmup_key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_seeds, max_steps)
+                _ = run_episodes_jax(
+                    warmup_key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_norm_fn, 
+                    state_equal_fn, num_actions, num_seeds, max_steps
+                )
             
             with progress.console.status(f"[bold green]Running {num_seeds} vectorized episodes on device...[/bold green]"):
                 key = jax.random.PRNGKey(42)
                 t0 = time.time()
                 rewards, steps, success, node_counts = run_episodes_jax(
-                    key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions, num_seeds, max_steps
+                    key, reset_fn, step_fn, solver_fn, action_mask_fn, reward_norm_fn,
+                    state_equal_fn, num_actions, num_seeds, max_steps
                 )
                 # Block to sync device
                 steps.block_until_ready()
