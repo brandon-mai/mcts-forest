@@ -10,11 +10,9 @@ from mcts_forest.scripts.jax_benchmark import make_gymnax_fns, make_jumanji_fns
 from mcts_forest.utils.experiment import parse_dict
 from mcts_forest.core.flax_models import FourRoomsNet, Game2048Net
 from mcts_forest.core.jax_alphazero import (
-    init_replay_buffer,
-    add_to_buffer,
-    sample_buffer,
     self_play_episode_batch,
-    train_step
+    train_steps_jit,
+    CpuReplayBuffer
 )
 import os
 from flax import serialization
@@ -90,9 +88,12 @@ def main():
     optimizer = optax.adam(args.learning_rate)
     opt_state = optimizer.init(params)
     
-    # Initialize Replay Buffer
-    console.print("[bold cyan]Initializing Replay Buffer...[/bold cyan]")
-    buffer = init_replay_buffer(args.buffer_size, dummy_obs, num_actions)
+    import threading
+    import numpy as np
+    
+    # Initialize CPU Replay Buffer
+    console.print("[bold cyan]Initializing CPU Replay Buffer...[/bold cyan]")
+    buffer = CpuReplayBuffer(args.buffer_size, dummy_obs, num_actions)
     
     # Fill replay buffer with initial self-play runs (warmup)
     console.print("[bold yellow]Generating initial warm-up trajectories...[/bold yellow]")
@@ -115,8 +116,7 @@ def main():
         args.gamma,
         **solver_kwargs
     )
-    buffer = add_to_buffer(
-        buffer,
+    buffer.add(
         trajectory["obs"],
         trajectory["target_policy"],
         trajectory["target_value"],
@@ -125,24 +125,23 @@ def main():
     
     console.print(f"[bold green]Replay buffer warmed up with {buffer.current_size} transitions.[/bold green]")
     
-    # Main training loop
-    n_iterations = args.max_steps // args.eval_freq
+    # Threading synchronizations
+    params_lock = threading.Lock()
+    buffer_lock = threading.Lock()
+    actor_running = True
+    cpu_rng = np.random.default_rng(42)
     
-    with Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TimeElapsedColumn(),
-        console=console
-    ) as progress:
-        task = progress.add_task("[cyan]Training AlphaZero...", total=n_iterations)
-        
-        for iteration in range(n_iterations):
-            run_key, play_key, train_key = jax.random.split(run_key, 3)
+    def actor_loop(actor_key):
+        nonlocal buffer
+        while actor_running:
+            actor_key, play_key = jax.random.split(actor_key)
             
-            # 1. Self-Play step to generate more experience
-            trajectory = self_play_episode_batch(
+            with params_lock:
+                current_params = params
+                
+            traj = self_play_episode_batch(
                 play_key,
-                params,
+                current_params,
                 model,
                 reset_fn,
                 step_fn,
@@ -157,46 +156,74 @@ def main():
                 args.gamma,
                 **solver_kwargs
             )
-            buffer = add_to_buffer(
-                buffer,
-                trajectory["obs"],
-                trajectory["target_policy"],
-                trajectory["target_value"],
-                trajectory["active_mask"]
-            )
             
-            # Calculate metrics
-            mean_reward = jnp.sum(trajectory["reward"]) / args.parallel_envs
-            mean_episode_length = jnp.sum(trajectory["active_mask"]) / args.parallel_envs
+            with buffer_lock:
+                buffer.add(
+                    traj["obs"],
+                    traj["target_policy"],
+                    traj["target_value"],
+                    traj["active_mask"]
+                )
+            time.sleep(0.01)
+
+    # Start Actor thread
+    actor_key, run_key = jax.random.split(run_key)
+    actor_thread = threading.Thread(target=actor_loop, args=(actor_key,))
+    actor_thread.daemon = True
+    actor_thread.start()
+    
+    # Main training loop
+    n_iterations = args.max_steps // args.eval_freq
+    
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console
+    ) as progress:
+        task = progress.add_task("[cyan]Training AlphaZero...", total=n_iterations)
+        
+        for iteration in range(n_iterations):
+            # Sample and stack on CPU
+            with buffer_lock:
+                sampled = [buffer.sample(cpu_rng, args.batch_size) for _ in range(args.eval_freq)]
+            stacked_batch = jax.tree.map(lambda *xs: np.stack(xs), *sampled)
             
-            # 2. Optimization updates
-            losses = []
-            train_keys = jax.random.split(train_key, args.eval_freq)
-            for step in range(args.eval_freq):
-                batch = sample_buffer(train_keys[step], buffer, args.batch_size)
-                params, opt_state, loss = train_step(
+            # Prefetch to device
+            device_batch = jax.device_put(stacked_batch)
+            
+            # Optimization steps JIT
+            with params_lock:
+                params, opt_state, losses = train_steps_jit(
                     params,
                     opt_state,
                     model,
                     optimizer,
-                    batch
+                    device_batch
                 )
-                losses.append(loss)
-                
-            avg_loss = jnp.mean(jnp.array(losses))
             
-            # Logs
+            # Sparse updates to terminal output
+            if iteration % 10 == 0 or iteration == n_iterations - 1:
+                avg_loss = float(jnp.mean(losses))
+                desc = f"[cyan]Train Step { (iteration+1)*args.eval_freq }/{args.max_steps} | Loss: {avg_loss:.4f} | Buffer Size: {buffer.current_size}"
+            else:
+                desc = f"[cyan]Training AlphaZero... { (iteration+1)*args.eval_freq }/{args.max_steps}"
+            
             progress.update(
                 task,
                 advance=1,
-                description=f"[cyan]Train Step { (iteration+1)*args.eval_freq }/{args.max_steps} | Loss: {avg_loss:.4f} | Mean Reward: {mean_reward:.2f} | Mean Ep Len: {mean_episode_length:.1f}"
+                description=desc
             )
             
             # Save checkpoint periodically
             step_num = (iteration + 1) * args.eval_freq
             if step_num % args.save_freq == 0:
-                save_checkpoint(args.checkpoint_dir, params, step_num)
-                
+                with params_lock:
+                    save_checkpoint(args.checkpoint_dir, params, step_num)
+                    
+    actor_running = False
+    actor_thread.join(timeout=5)
+    
     console.print("[bold green]Training complete![/bold green]")
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import optax
 import flax.linen as nn
+import numpy as np
 from typing import NamedTuple, Any, Callable, Dict, Tuple, Optional
 from functools import partial
 from mcts_forest.core.jax_mctxf import jax_mctx_search
@@ -210,3 +211,72 @@ def train_step(
     updates, new_opt_state = optimizer.update(grads, opt_state, params)
     new_params = optax.apply_updates(params, updates)
     return new_params, new_opt_state, loss
+
+@partial(jax.jit, static_argnums=(2, 3))
+def train_steps_jit(
+    params: Any,
+    opt_state: optax.OptState,
+    model: nn.Module,
+    optimizer: optax.GradientTransformation,
+    stacked_batch: Dict[str, Any]
+) -> Tuple[Any, optax.OptState, jnp.ndarray]:
+    def scan_fn(carry, batch):
+        p, opt_s = carry
+        p, opt_s, loss = train_step(p, opt_s, model, optimizer, batch)
+        return (p, opt_s), loss
+
+    (new_params, new_opt_state), losses = jax.lax.scan(scan_fn, (params, opt_state), stacked_batch)
+    return new_params, new_opt_state, losses
+
+class CpuReplayBuffer:
+    def __init__(self, buffer_size: int, obs_example: Any, num_actions: int):
+        self.buffer_size = buffer_size
+        self.pointer = 0
+        self.current_size = 0
+        
+        self.obs = jax.tree.map(
+            lambda x: np.zeros((buffer_size,) + x.shape, dtype=np.asarray(x).dtype),
+            obs_example
+        )
+        self.target_policy = np.zeros((buffer_size, num_actions), dtype=np.float32)
+        self.target_value = np.zeros((buffer_size,), dtype=np.float32)
+        self.active_mask = np.zeros((buffer_size,), dtype=np.float32)
+        
+    def add(self, obs: Any, target_policy: jnp.ndarray, target_value: jnp.ndarray, active_mask: jnp.ndarray):
+        # Convert JAX device arrays to NumPy on the host (non-blocking if async, but runs in background thread anyway)
+        obs_np = jax.tree.map(np.asarray, obs)
+        policy_np = np.asarray(target_policy)
+        value_np = np.asarray(target_value)
+        mask_np = np.asarray(active_mask)
+        
+        flat_obs = jax.tree.map(lambda x: x.reshape((-1,) + x.shape[2:]), obs_np)
+        flat_policy = policy_np.reshape((-1, policy_np.shape[-1]))
+        flat_value = value_np.reshape((-1,))
+        flat_mask = mask_np.reshape((-1,))
+        
+        n_transitions = flat_value.shape[0]
+        indices = (self.pointer + np.arange(n_transitions)) % self.buffer_size
+        
+        jax.tree.map(
+            lambda buf_arr, batch_arr: buf_arr.at[indices].set(batch_arr) if hasattr(buf_arr, 'at') else (buf_arr.__setitem__(indices, batch_arr)),
+            self.obs,
+            flat_obs
+        )
+        
+        # NumPy array assignment
+        self.target_policy[indices] = flat_policy
+        self.target_value[indices] = flat_value
+        self.active_mask[indices] = flat_mask
+        
+        self.pointer = (self.pointer + n_transitions) % self.buffer_size
+        self.current_size = min(self.current_size + n_transitions, self.buffer_size)
+        
+    def sample(self, key_or_rng: np.random.Generator, batch_size: int) -> Dict[str, Any]:
+        idx = key_or_rng.integers(0, self.current_size, size=batch_size)
+        sampled_obs = jax.tree.map(lambda x: x[idx], self.obs)
+        return {
+            "obs": sampled_obs,
+            "target_policy": self.target_policy[idx],
+            "target_value": self.target_value[idx],
+            "active_mask": self.active_mask[idx]
+        }
