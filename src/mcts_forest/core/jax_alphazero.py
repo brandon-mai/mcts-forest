@@ -185,18 +185,29 @@ def self_play_episode_batch(
         "reward": trajectories["reward"]
     }
 
-def loss_fn(params: Any, model: nn.Module, batch: Dict[str, Any]) -> jnp.ndarray:
+def loss_fn(params: Any, model: nn.Module, batch: Dict[str, Any], l2_wd: float = 1e-4) -> Tuple[jnp.ndarray, Dict[str, jnp.ndarray]]:
     pred_logits, pred_value = model.apply(params, batch["obs"])
     
     # policy cross entropy
     policy_loss = optax.softmax_cross_entropy(pred_logits, batch["target_policy"])
+    policy_loss = (policy_loss * batch["active_mask"]).mean()
     
     # value MSE
     value_loss = jnp.square(pred_value - batch["target_value"])
+    value_loss = (value_loss * batch["active_mask"]).mean()
     
-    # Weight by active mask
-    total_loss = (policy_loss + value_loss) * batch["active_mask"]
-    return total_loss.mean()
+    # L2 regularization
+    l2_loss = sum(jnp.sum(x ** 2) for x in jax.tree_util.tree_leaves(params))
+    
+    total_loss = policy_loss + value_loss + l2_wd * l2_loss
+    
+    metrics = {
+        "loss": total_loss,
+        "policy_loss": policy_loss,
+        "value_loss": value_loss,
+        "l2_loss": l2_loss
+    }
+    return total_loss, metrics
 
 @partial(jax.jit, static_argnums=(2, 3))
 def train_step(
@@ -205,12 +216,17 @@ def train_step(
     model: nn.Module,
     optimizer: optax.GradientTransformation,
     batch: Dict[str, Any]
-) -> Tuple[Any, optax.OptState, jnp.ndarray]:
-    grad_fn = jax.value_and_grad(lambda p: loss_fn(p, model, batch))
-    loss, grads = grad_fn(params)
+) -> Tuple[Any, optax.OptState, Dict[str, jnp.ndarray]]:
+    grad_fn = jax.value_and_grad(lambda p: loss_fn(p, model, batch), has_aux=True)
+    (loss, metrics), grads = grad_fn(params)
     updates, new_opt_state = optimizer.update(grads, opt_state, params)
     new_params = optax.apply_updates(params, updates)
-    return new_params, new_opt_state, loss
+    
+    # Compute gradient norm
+    grad_norm = jnp.sqrt(sum(jnp.sum(g ** 2) for g in jax.tree_util.tree_leaves(grads)))
+    metrics["grad_norm"] = grad_norm
+    
+    return new_params, new_opt_state, metrics
 
 @partial(jax.jit, static_argnums=(2, 3))
 def train_steps_jit(
@@ -219,14 +235,14 @@ def train_steps_jit(
     model: nn.Module,
     optimizer: optax.GradientTransformation,
     stacked_batch: Dict[str, Any]
-) -> Tuple[Any, optax.OptState, jnp.ndarray]:
+) -> Tuple[Any, optax.OptState, Dict[str, jnp.ndarray]]:
     def scan_fn(carry, batch):
         p, opt_s = carry
-        p, opt_s, loss = train_step(p, opt_s, model, optimizer, batch)
-        return (p, opt_s), loss
+        p, opt_s, metrics = train_step(p, opt_s, model, optimizer, batch)
+        return (p, opt_s), metrics
 
-    (new_params, new_opt_state), losses = jax.lax.scan(scan_fn, (params, opt_state), stacked_batch)
-    return new_params, new_opt_state, losses
+    (new_params, new_opt_state), metrics_history = jax.lax.scan(scan_fn, (params, opt_state), stacked_batch)
+    return new_params, new_opt_state, metrics_history
 
 class CpuReplayBuffer:
     def __init__(self, buffer_size: int, obs_example: Any, num_actions: int):

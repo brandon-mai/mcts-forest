@@ -56,7 +56,7 @@ def main():
     if args.env == "fourrooms":
         reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions = make_gymnax_fns("FourRooms-misc")
         model = FourRoomsNet(num_actions=num_actions)
-        max_episode_steps = 250
+        max_episode_steps = 500
     else:
         reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions = make_jumanji_fns("Game2048-v1")
         model = Game2048Net(num_actions=num_actions)
@@ -128,11 +128,20 @@ def main():
     # Threading synchronizations
     params_lock = threading.Lock()
     buffer_lock = threading.Lock()
+    metrics_lock = threading.Lock()
     actor_running = True
     cpu_rng = np.random.default_rng(42)
     
+    total_transitions = int(buffer.current_size)
+    last_trained_transitions = 0
+    
+    latest_metrics = {
+        "mean_reward": float(jnp.sum(trajectory["reward"]) / args.parallel_envs),
+        "mean_episode_length": float(jnp.sum(trajectory["active_mask"]) / args.parallel_envs)
+    }
+    
     def actor_loop(actor_key):
-        nonlocal buffer
+        nonlocal buffer, total_transitions
         while actor_running:
             actor_key, play_key = jax.random.split(actor_key)
             
@@ -157,6 +166,10 @@ def main():
                 **solver_kwargs
             )
             
+            m_reward = float(jnp.sum(traj["reward"]) / args.parallel_envs)
+            m_ep_len = float(jnp.sum(traj["active_mask"]) / args.parallel_envs)
+            added_size = int(jnp.sum(traj["active_mask"]))
+            
             with buffer_lock:
                 buffer.add(
                     traj["obs"],
@@ -164,6 +177,12 @@ def main():
                     traj["target_value"],
                     traj["active_mask"]
                 )
+                total_transitions += added_size
+                
+            with metrics_lock:
+                latest_metrics["mean_reward"] = m_reward
+                latest_metrics["mean_episode_length"] = m_ep_len
+                
             time.sleep(0.01)
 
     # Start Actor thread
@@ -184,6 +203,17 @@ def main():
         task = progress.add_task("[cyan]Training AlphaZero...", total=n_iterations)
         
         for iteration in range(n_iterations):
+            # Enforce Replay Ratio limit (e.g. 4.0 updates per transition on average)
+            replay_ratio = 4.0
+            new_transitions_needed = int((args.batch_size * args.eval_freq) / replay_ratio)
+            
+            while total_transitions - last_trained_transitions < new_transitions_needed:
+                time.sleep(0.1)
+                if not actor_thread.is_alive():
+                    break
+            
+            last_trained_transitions += new_transitions_needed
+            
             # Sample and stack on CPU
             with buffer_lock:
                 sampled = [buffer.sample(cpu_rng, args.batch_size) for _ in range(args.eval_freq)]
@@ -202,17 +232,32 @@ def main():
                     device_batch
                 )
             
-            # Sparse updates to terminal output
-            if iteration % 10 == 0 or iteration == n_iterations - 1:
-                avg_loss = float(jnp.mean(losses))
-                desc = f"[cyan]Train Step { (iteration+1)*args.eval_freq }/{args.max_steps} | Loss: {avg_loss:.4f} | Buffer Size: {buffer.current_size}"
-            else:
-                desc = f"[cyan]Training AlphaZero... { (iteration+1)*args.eval_freq }/{args.max_steps}"
+            # Compute loss metrics
+            avg_loss = float(jnp.mean(losses["loss"]))
+            avg_policy_loss = float(jnp.mean(losses["policy_loss"]))
+            avg_value_loss = float(jnp.mean(losses["value_loss"]))
+            avg_l2_loss = float(jnp.mean(losses["l2_loss"]))
+            avg_grad_norm = float(jnp.mean(losses["grad_norm"]))
+            
+            with metrics_lock:
+                m_reward = latest_metrics["mean_reward"]
+                m_ep_len = latest_metrics["mean_episode_length"]
+            
+            progress.console.print(
+                f"[cyan]Step {(iteration+1)*args.eval_freq}/{args.max_steps} | "
+                f"Loss: {avg_loss:.4f} | "
+                f"Policy Loss: {avg_policy_loss:.4f} | "
+                f"Value Loss: {avg_value_loss:.4f} | "
+                f"L2 Loss: {avg_l2_loss:.4f} | "
+                f"Grad Norm: {avg_grad_norm:.4f} | "
+                f"Mean Reward: {m_reward:.2f} | "
+                f"Mean Ep Len: {m_ep_len:.1f}[/cyan]"
+            )
             
             progress.update(
                 task,
                 advance=1,
-                description=desc
+                description=f"[cyan]Training AlphaZero... {(iteration+1)*args.eval_freq}/{args.max_steps}"
             )
             
             # Save checkpoint periodically
