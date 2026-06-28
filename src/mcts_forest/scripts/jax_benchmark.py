@@ -51,6 +51,8 @@ console = Console()
 
 def make_gymnax_fns(env_name: str):
     env, params = gymnax.make(env_name)
+    if env_name == "FourRooms-misc":
+        params = params.replace(resample_init_pos=True, resample_goal_pos=True)
     
     def reset_fn(key):
         obs, state = env.reset(key, params)

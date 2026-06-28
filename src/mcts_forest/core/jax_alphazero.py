@@ -290,13 +290,18 @@ class CpuReplayBuffer:
         sliced_value = value_np[:, keep_envs]
         sliced_mask = mask_np[:, keep_envs]
         
-        # Flatten shapes: [steps, B_kept, ...] -> [steps * B_kept, ...]
-        flat_obs = jax.tree.map(lambda x: x.reshape((-1,) + x.shape[2:]), sliced_obs)
-        flat_policy = sliced_policy.reshape((-1, sliced_policy.shape[-1]))
-        flat_value = sliced_value.reshape((-1,))
-        flat_mask = sliced_mask.reshape((-1,))
+        # Filter out padding/inactive transitions where mask is 0.0
+        active_indices = np.where(sliced_mask == 1.0)
+        
+        flat_obs = jax.tree.map(lambda x: x[active_indices], sliced_obs)
+        flat_policy = sliced_policy[active_indices]
+        flat_value = sliced_value[active_indices]
+        flat_mask = sliced_mask[active_indices]
         
         n_transitions = flat_value.shape[0]
+        if n_transitions == 0:
+            return 0
+            
         indices = (self.pointer + np.arange(n_transitions)) % self.buffer_size
         
         jax.tree.map(
