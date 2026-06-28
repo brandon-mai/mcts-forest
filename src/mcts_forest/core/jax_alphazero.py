@@ -258,17 +258,43 @@ class CpuReplayBuffer:
         self.target_value = np.zeros((buffer_size,), dtype=np.float32)
         self.active_mask = np.zeros((buffer_size,), dtype=np.float32)
         
-    def add(self, obs: Any, target_policy: jnp.ndarray, target_value: jnp.ndarray, active_mask: jnp.ndarray):
+    def add(self, obs: Any, target_policy: jnp.ndarray, target_value: jnp.ndarray, active_mask: jnp.ndarray, fail_keep_prob: float = 1.0) -> int:
         # Convert JAX device arrays to NumPy on the host (non-blocking if async, but runs in background thread anyway)
         obs_np = jax.tree.map(np.asarray, obs)
         policy_np = np.asarray(target_policy)
         value_np = np.asarray(target_value)
         mask_np = np.asarray(active_mask)
         
-        flat_obs = jax.tree.map(lambda x: x.reshape((-1,) + x.shape[2:]), obs_np)
-        flat_policy = policy_np.reshape((-1, policy_np.shape[-1]))
-        flat_value = value_np.reshape((-1,))
-        flat_mask = mask_np.reshape((-1,))
+        # Check success of each parallel environment (any step has target_value > 0)
+        # target_value shape: [max_episode_steps, parallel_envs]
+        success_mask = np.any(value_np > 0.0, axis=0) # [parallel_envs]
+        
+        # Decide which environments to keep
+        keep_envs = []
+        for env_idx in range(success_mask.shape[0]):
+            is_success = success_mask[env_idx]
+            if is_success:
+                keep_envs.append(env_idx)
+            else:
+                if np.random.rand() < fail_keep_prob:
+                    keep_envs.append(env_idx)
+                    
+        if len(keep_envs) == 0:
+            return 0  # No transitions added
+            
+        keep_envs = np.array(keep_envs)
+        
+        # Slice inputs to keep only selected environments
+        sliced_obs = jax.tree.map(lambda x: x[:, keep_envs], obs_np)
+        sliced_policy = policy_np[:, keep_envs]
+        sliced_value = value_np[:, keep_envs]
+        sliced_mask = mask_np[:, keep_envs]
+        
+        # Flatten shapes: [steps, B_kept, ...] -> [steps * B_kept, ...]
+        flat_obs = jax.tree.map(lambda x: x.reshape((-1,) + x.shape[2:]), sliced_obs)
+        flat_policy = sliced_policy.reshape((-1, sliced_policy.shape[-1]))
+        flat_value = sliced_value.reshape((-1,))
+        flat_mask = sliced_mask.reshape((-1,))
         
         n_transitions = flat_value.shape[0]
         indices = (self.pointer + np.arange(n_transitions)) % self.buffer_size
@@ -286,6 +312,7 @@ class CpuReplayBuffer:
         
         self.pointer = (self.pointer + n_transitions) % self.buffer_size
         self.current_size = min(self.current_size + n_transitions, self.buffer_size)
+        return n_transitions
         
     def sample(self, key_or_rng: np.random.Generator, batch_size: int) -> Dict[str, Any]:
         idx = key_or_rng.integers(0, self.current_size, size=batch_size)

@@ -96,6 +96,7 @@ def main():
     # Initialize CPU Replay Buffer
     console.print("[bold cyan]Initializing CPU Replay Buffer...[/bold cyan]")
     buffer = CpuReplayBuffer(args.buffer_size, dummy_obs, num_actions)
+    fail_keep_prob_val = 0.2 if args.env == "fourrooms" else 1.0
     
     # Fill replay buffer with initial self-play runs (warmup)
     console.print("[bold yellow]Generating initial warm-up trajectories...[/bold yellow]")
@@ -122,7 +123,8 @@ def main():
         trajectory["obs"],
         trajectory["target_policy"],
         trajectory["target_value"],
-        trajectory["active_mask"]
+        trajectory["active_mask"],
+        fail_keep_prob=fail_keep_prob_val
     )
     
     console.print(f"[bold green]Replay buffer warmed up with {buffer.current_size} transitions.[/bold green]")
@@ -170,14 +172,14 @@ def main():
             
             m_reward = float(jnp.sum(traj["reward"]) / args.parallel_envs)
             m_ep_len = float(jnp.sum(traj["active_mask"]) / args.parallel_envs)
-            added_size = int(jnp.sum(traj["active_mask"]))
             
             with buffer_lock:
-                buffer.add(
+                added_size = buffer.add(
                     traj["obs"],
                     traj["target_policy"],
                     traj["target_value"],
-                    traj["active_mask"]
+                    traj["active_mask"],
+                    fail_keep_prob=fail_keep_prob_val
                 )
                 total_transitions += added_size
                 
