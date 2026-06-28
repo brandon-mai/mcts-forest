@@ -169,7 +169,7 @@ def self_play_episode_batch(
     
     # Calculate undiscounted empirical returns in raw scale
     final_value = jnp.zeros(num_parallel)
-    raw_returns = compute_returns(trajectories["reward"], trajectories["active_mask"], final_value)
+    raw_returns = compute_returns(trajectories["reward"], trajectories["discount"], final_value)
     
     # Apply normalization to the final accumulated return
     if reward_norm_fn is not None:

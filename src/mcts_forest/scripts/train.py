@@ -17,6 +17,8 @@ from mcts_forest.core.jax_alphazero import (
 import os
 from flax import serialization
 
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+
 console = Console()
 
 def save_checkpoint(checkpoint_dir, params, step):
@@ -183,7 +185,7 @@ def main():
                 latest_metrics["mean_reward"] = m_reward
                 latest_metrics["mean_episode_length"] = m_ep_len
                 
-            time.sleep(0.01)
+            time.sleep(0.001)
 
     # Start Actor thread
     actor_key, run_key = jax.random.split(run_key)

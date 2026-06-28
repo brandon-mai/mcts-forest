@@ -132,7 +132,7 @@ To obtain high-quality trained networks, use the following serious training comm
 
 ```bash
 # 1. Train using UCT (Old MCTS: no state merging, standard UCB, infinite horizon)
-uv run train --env fourrooms --sims 128 --parallel_envs 32 --max_steps 50000 --batch_size 128 --buffer_size 50000 --learning_rate 1e-4 --save_freq 1000 --eval_freq 1000 --checkpoint_dir "results/uct_fourrooms" --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'standard'}"
+uv run train --env fourrooms --sims 128 --parallel_envs 128 --max_steps 50000 --batch_size 1024 --buffer_size 50000 --learning_rate 1e-4 --save_freq 1000 --eval_freq 200 --checkpoint_dir "results/uct_fourrooms" --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'standard'}"
 
 # 1.1. Benchmark with trained network
 uv run benchmark --env fourrooms --solver mctx --sims "(16, 32, 64, 128)" --seeds 1000 --model_checkpoint results/uct_fourrooms/checkpoint_latest.msgpack --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'standard'}"
