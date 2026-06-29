@@ -70,6 +70,17 @@ class FourRoomsNet(nn.Module):
             
         return logits, jnp.squeeze(value, axis=-1)
 
+class ResBlock(nn.Module):
+    features: int
+    
+    @nn.compact
+    def __call__(self, x: Any) -> Any:
+        residual = x
+        x = nn.Conv(features=self.features, kernel_size=(3, 3), padding="SAME")(x)
+        x = nn.relu(x)
+        x = nn.Conv(features=self.features, kernel_size=(3, 3), padding="SAME")(x)
+        return nn.relu(x + residual)
+
 class Game2048Net(nn.Module):
     num_actions: int = 4
     
@@ -88,27 +99,31 @@ class Game2048Net(nn.Module):
             
         B = board.shape[0]
         
-        # Normalize: divide exponents by 16.0 to range [0, 1]
-        board_norm = board.astype(jnp.float32) / 16.0
+        # Clip exponents to [0, 15] and one-hot encode
+        board_clipped = jnp.clip(board.astype(jnp.int32), 0, 15)
+        grid = jax.nn.one_hot(board_clipped, 16) # [B, 4, 4, 16]
         
-        # Add channel dimension: [B, 4, 4, 1]
-        grid = jnp.expand_dims(board_norm, axis=-1)
-        
-        # Conv backbone
-        x_conv = nn.Conv(features=32, kernel_size=(3, 3), padding="SAME")(grid)
+        # ResNet backbone
+        x_conv = nn.Conv(features=64, kernel_size=(3, 3), padding="SAME")(grid)
         x_conv = nn.relu(x_conv)
-        x_conv = nn.Conv(features=32, kernel_size=(3, 3), padding="SAME")(x_conv)
-        x_conv = nn.relu(x_conv)
+        x_conv = ResBlock(features=64)(x_conv)
+        x_conv = ResBlock(features=64)(x_conv)
         
-        # Flatten
-        x_flat = x_conv.reshape((B, -1))
+        # Policy Head
+        p_head = nn.Conv(features=2, kernel_size=(1, 1), padding="SAME")(x_conv)
+        p_head = nn.relu(p_head)
+        p_flat = p_head.reshape((B, -1))
+        p_dense = nn.Dense(128)(p_flat)
+        p_dense = nn.relu(p_dense)
+        logits = nn.Dense(self.num_actions)(p_dense)
         
-        # Dense layers
-        x_dense = nn.Dense(128)(x_flat)
-        x_dense = nn.relu(x_dense)
-        
-        logits = nn.Dense(self.num_actions)(x_dense)
-        value = nn.Dense(1)(x_dense)
+        # Value Head
+        v_head = nn.Conv(features=1, kernel_size=(1, 1), padding="SAME")(x_conv)
+        v_head = nn.relu(v_head)
+        v_flat = v_head.reshape((B, -1))
+        v_dense = nn.Dense(128)(v_flat)
+        v_dense = nn.relu(v_dense)
+        value = nn.Dense(1)(v_dense)
         
         # Squeeze batch if input was not batched
         if not is_batched:
