@@ -120,6 +120,9 @@ uv run benchmark --env fourrooms --solver mctx --sims "(16, 32, 64, 128, 256, 51
 
 # ULTIMATE 2048
 uv run benchmark --env 2048 --solver mctx --sims "(32, 64, 128, 256, 512, 1024, 2048)" --seeds 1000 --solver_args "{'merge_mode': ('pure_tree', 'depth_dependent', 'depth_independent'), 'max_depth': 3, 'ucb_mode': 'spuct', 'p': (1.0, 2.0), 'gamma': 0.95, 'num_chance_outcomes': 30}" --table
+
+# Mods ablation
+uv run benchmark --env fourrooms --solver mctx --sims "(128)" --seeds 1000 --solver_args "{'merge_mode': 'depth_independent', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}" --table
 ```
 
 ### AlphaZero Training
@@ -134,11 +137,23 @@ To obtain high-quality trained networks, use the following serious training comm
 # 1. Train using UCT (Old MCTS: no state merging, standard UCB, infinite horizon)
 uv run train --env fourrooms --sims 128 --parallel_envs 128 --max_steps 50000 --batch_size 1024 --buffer_size 50000 --learning_rate 1e-4 --save_freq 1000 --eval_freq 200 --checkpoint_dir "results/uct_fourrooms" --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'standard'}"
 
-# 1.1. Benchmark with trained network
+uv run train --env fourrooms --sims 128 --parallel_envs 128 --max_steps 50000 --batch_size 1024 --buffer_size 50000 --learning_rate 1e-4 --save_freq 1000 --eval_freq 200 --checkpoint_dir "results/gspuctf_fourrooms" --num_actors 8 --solver_args "{'merge_mode': 'depth_independent', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.2}"
+
+uv run train --env 2048 --sims 128 --parallel_envs 128 --max_steps 50000 --batch_size 1024 --buffer_size 50000 --learning_rate 1e-4 --save_freq 1000 --eval_freq 200 --checkpoint_dir "results/uct_2048" --num_actors 16 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'standard'}"
+
+uv run train --env 2048 --sims 128 --parallel_envs 128 --max_steps 50000 --batch_size 1024 --buffer_size 50000 --learning_rate 1e-4 --save_freq 1000 --eval_freq 200 --checkpoint_dir "results/gspuctf_2048" --num_actors 16 --solver_args "{'merge_mode': 'depth_independent', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.2}"
+
+# 2. Benchmark with trained networks:
+# results/uct_fourrooms/checkpoint_latest.msgpack
+# results/gspuctf_fourrooms/checkpoint_latest.msgpack
 uv run benchmark --env fourrooms --solver mctx --sims "(16, 32, 64, 128)" --seeds 1000 --model_checkpoint results/uct_fourrooms/checkpoint_latest.msgpack --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'standard'}"
 
-# 2. Train using GSPUCTF (New MCTS: depth-independent state merging, SP-UCT UCB, limited horizon)
-uv run train --env fourrooms --sims 128 --parallel_envs 32 --max_steps 50000 --batch_size 128 --buffer_size 50000 --learning_rate 5e-4 --save_freq 1000 --checkpoint_dir "results/gspuct_fourrooms" --solver_args "{'merge_mode': 'depth_independent', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.2}"
+uv run benchmark --env fourrooms --solver mctx --sims "(16, 32, 64, 128)" --seeds 1000 --model_checkpoint results/gspuctf_fourrooms/checkpoint_latest.msgpack --solver_args "{'merge_mode': 'depth_independent', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.2}"
+
+uv run benchmark --env 2048 --solver mctx --sims "(16, 32, 64, 128)" --seeds 1000 --model_checkpoint results/uct_2048/checkpoint_latest.msgpack --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'standard'}"
+
+uv run benchmark --env 2048 --solver mctx --sims "(16, 32, 64, 128)" --seeds 1000 --model_checkpoint results/gspuctf_2048/checkpoint_latest.msgpack --solver_args "{'merge_mode': 'depth_independent', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.2}"
+
 ```
 
 #### Training Arguments

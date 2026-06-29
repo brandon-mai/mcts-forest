@@ -49,6 +49,7 @@ def main():
     parser.add_argument("--checkpoint_dir", type=str, default="results/checkpoints", help="Directory to save checkpoints")
     parser.add_argument("--resume", action="store_true", help="Resume from the latest checkpoint if available")
     parser.add_argument("--save_freq", type=int, default=100, help="Checkpoint saving frequency (steps)")
+    parser.add_argument("--num_actors", type=int, default=4, help="Number of concurrent actor threads for self-play")
     args = parser.parse_args()
 
     console.print(f"[bold cyan]Initializing {args.env} environment...[/bold cyan]")
@@ -189,11 +190,14 @@ def main():
                 
             time.sleep(0.001)
 
-    # Start Actor thread
-    actor_key, run_key = jax.random.split(run_key)
-    actor_thread = threading.Thread(target=actor_loop, args=(actor_key,))
-    actor_thread.daemon = True
-    actor_thread.start()
+    # Start Actor threads
+    actor_threads = []
+    for _ in range(args.num_actors):
+        actor_key, run_key = jax.random.split(run_key)
+        t = threading.Thread(target=actor_loop, args=(actor_key,))
+        t.daemon = True
+        t.start()
+        actor_threads.append(t)
     
     # Main training loop
     n_iterations = args.max_steps // args.eval_freq
@@ -213,7 +217,7 @@ def main():
             
             while total_transitions - last_trained_transitions < new_transitions_needed:
                 time.sleep(0.1)
-                if not actor_thread.is_alive():
+                if not any(t.is_alive() for t in actor_threads):
                     break
             
             last_trained_transitions += new_transitions_needed
@@ -271,7 +275,8 @@ def main():
                     save_checkpoint(args.checkpoint_dir, params, step_num)
                     
     actor_running = False
-    actor_thread.join(timeout=5)
+    for t in actor_threads:
+        t.join(timeout=5)
     
     console.print("[bold green]Training complete![/bold green]")
 
