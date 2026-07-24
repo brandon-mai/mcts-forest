@@ -106,6 +106,8 @@ uv run benchmark --env fourrooms --solver mctx --sims "(16, 32, 64, 128, 256, 51
 
 uv run benchmark --env 2048 --solver mctx --sims "(16, 32, 64, 128)" --seeds 1000 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'standard', 'p': 1.0, 'gamma': 0.95, 'num_chance_outcomes': 30}" --table
 
+uv run benchmark --env frozen_lake --solver mctx --sims "(16, 32, 64, 128)" --seeds 1000 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'standard', 'p': 1.0, 'gamma': 0.95, 'num_chance_outcomes': 3}" --table
+
 # SPUCT
 uv run benchmark --env fourrooms --solver mctx --sims "(16, 32, 64, 128, 256, 512, 1024, 2048)" --seeds 1000 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 2.0, 'gamma': 0.95}" --table
 

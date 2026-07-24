@@ -44,6 +44,7 @@ from mcts_forest.core.jax_spuct import jax_spuct_search
 from mcts_forest.core.jax_mctxf import jax_mctx_search
 from mcts_forest.core.flax_models import FourRoomsNet, Game2048Net
 from flax import serialization
+from mcts_forest.envs.jax_custom_envs import make_custom_fns
 
 console = Console()
 
@@ -145,7 +146,9 @@ def parse_grid_item(value: Any) -> List[Any]:
                     return list(res)
                 return [res]
             except:
-                return [value]
+                pass
+        if ',' in value:
+            return [x.strip() for x in value.split(',') if x.strip()]
     return [value]
 
 def expand_params(params: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -197,8 +200,13 @@ def main():
     # 1. Pre-generate combinations
     expanded_solver_args = expand_params(solver_kwargs)
     all_experiments = []
+    custom_env_keys = ["frozen_lake", "passenger_grid", "factored_river_swim", "sysadmin_ring", "four_rooms", "frozenlake", "passengergrid", "factoredriverswim", "sysadminring", "sysadmin", "river_swim"]
     for env_name in envs:
-        if "fourrooms" not in env_name.lower() and "2048" not in env_name.lower():
+        env_key = env_name.lower()
+        is_custom = any(k in env_key for k in custom_env_keys)
+        is_gymnax_fourrooms = ("fourrooms" in env_key or "four_rooms" in env_key) and not is_custom
+        is_2048 = ("2048" in env_key)
+        if not (is_custom or is_gymnax_fourrooms or is_2048):
             continue
         for solver_name in solvers:
             if solver_name.lower() not in ["random", "spuct", "mctx"]:
@@ -258,13 +266,36 @@ def main():
             
             progress.update(overall_task, description=f"[bold cyan]Grid: {current_label} ({i+1}/{len(all_experiments)})")
             
-            # Load environment fns
-            if "fourrooms" in env_name.lower():
+            # Load environment fns and set env-specific max_steps
+            env_key = env_name.lower()
+            if any(k in env_key for k in ["frozen_lake", "frozenlake"]):
+                reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions = make_custom_fns(env_name)
+                env_disp = env_name
+                max_steps = 200
+            elif any(k in env_key for k in ["passenger_grid", "passengergrid"]):
+                reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions = make_custom_fns(env_name)
+                env_disp = env_name
+                max_steps = 50
+            elif any(k in env_key for k in ["factored_river_swim", "factoredriverswim", "river_swim"]):
+                reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions = make_custom_fns(env_name)
+                env_disp = env_name
+                max_steps = 35
+            elif any(k in env_key for k in ["sysadmin_ring", "sysadminring", "sysadmin"]):
+                reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions = make_custom_fns(env_name)
+                env_disp = env_name
+                max_steps = 50
+            elif "four_rooms" in env_key:
+                reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions = make_custom_fns(env_name)
+                env_disp = env_name
+                max_steps = 50
+            elif "fourrooms" in env_key:
                 reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions = make_gymnax_fns("FourRooms-misc")
                 env_disp = "fourrooms"
+                max_steps = 500
             else:
                 reset_fn, step_fn, action_mask_fn, reward_norm_fn, state_equal_fn, num_actions = make_jumanji_fns("Game2048-v1")
                 env_disp = "2048"
+                max_steps = 500
                 
             # Load model parameters if checkpoint provided
             nn_model = None
