@@ -106,16 +106,22 @@ uv run benchmark --env fourrooms --solver mctx --sims "(16, 32, 64, 128, 256, 51
 
 uv run benchmark --env 2048 --solver mctx --sims "(16, 32, 64, 128)" --seeds 1000 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'standard', 'p': 1.0, 'gamma': 0.95, 'num_chance_outcomes': 30}" --table
 
-uv run benchmark --env frozen_lake --solver mctx --sims "(16, 32, 64, 128)" --seeds 1000 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'standard', 'p': 1.0, 'gamma': 0.95, 'num_chance_outcomes': 3}" --table
+uv run benchmark --env frozen_lake --solver mctx --sims "(2048)" --seeds 1000 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'standard', 'p': 1.0, 'gamma': 0.95, 'num_chance_outcomes': 3}" --table
 
 # SPUCT
 uv run benchmark --env fourrooms --solver mctx --sims "(16, 32, 64, 128, 256, 512, 1024, 2048)" --seeds 1000 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 2.0, 'gamma': 0.95}" --table
 
+uv run benchmark --env passenger_grid --solver mctx --sims "(16, 32, 64, 128, 256, 512, 1024, 2048)" --seeds 1000 --solver_args "{'merge_mode': 'pure_tree', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}" --table
+
 # GSPUCT
 uv run benchmark --env 2048 --solver mctx --sims "(128)" --seeds 1000 --solver_args "{'merge_mode': 'depth_dependent', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': (1.0, 1.2, 1.5, 2.0, 5.0, 10.0, 'inf'), 'gamma': 0.95}" --table
 
+uv run benchmark --env passenger_grid --solver mctx --sims "(2048)" --seeds 1000 --solver_args "{'merge_mode': 'depth_dependent', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}" --table
+
 # GSPUCTF
 uv run benchmark --env fourrooms --solver mctx --sims "(128)" --seeds 1000 --solver_args "{'merge_mode': 'depth_independent', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}" --table
+
+uv run benchmark --env frozen_lake --solver mctx --sims "(2048)" --seeds 1000 --solver_args "{'merge_mode': 'depth_independent', 'max_depth': 3, 'ucb_mode': 'spuct', 'p': 1.0, 'gamma': 0.95}" --table
 
 # ULTIMATE FOUR ROOMS
 uv run benchmark --env fourrooms --solver mctx --sims "(16, 32, 64, 128, 256, 512, 1024, 2048)" --seeds 1000 --solver_args "{'merge_mode': ('depth_dependent', 'depth_independent'), 'max_depth': 3, 'ucb_mode': 'spuct', 'p': (1.0, 2.0), 'gamma': 0.95}" --table
